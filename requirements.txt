@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+smartapi-python>=1.4.8
+pyotp>=2.9
+logzero>=1.7
+pandas>=2.0
+numpy>=1.26
+apscheduler>=3.10,<4
+yfinance>=0.2.40
+requests>=2.31
+python-dotenv>=1.0
+pytz>=2024.1
