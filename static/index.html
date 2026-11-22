@@ -8,115 +8,70 @@
   <link rel="manifest" href="/static/manifest.json" />
   <script src="https://unpkg.com"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background: #0b0f17; color: #e5e7eb; overflow-x: hidden; }
-    .topbar { background: #111827; padding: 12px 14px 8px; border-bottom: 1px solid #1f2937; position: sticky; top: 0; z-index: 20; }
-    .status-grid { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
-    .status-grid b.ok { color: #10b981; }
-    .status-grid b.warn { color: #f59e0b; }
-    .page-tabs { display: flex; border-bottom: 1px solid #1f2937; background: #111827; }
-    .page-tab { flex: 1; text-align: center; padding: 10px 6px; font-size: 13px; font-weight: 700; color: #9ca3af; cursor: pointer; border-bottom: 3px solid transparent; }
-    .page-tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
-    .page-tab .badge { background: #1f2937; color: #e5e7eb; padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
-    .page-tab.active .badge { background: #1d4ed8; color: #fff; }
-    .swipe-container { display: flex; width: 200vw; transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
-    .page { width: 100vw; min-height: calc(100vh - 95px); padding: 12px 14px 40px; }
-    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-    button { border: none; border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .btn-primary { background: #2563eb; color: #fff; }
-    .btn-secondary { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
-    .btn-toggle { background: #1f2937; color: #f87171; border: 1px solid #374151; font-size: 12px; padding: 8px; }
-    .btn-toggle.on { color: #34d399; border-color: #059669; }
-    .meta-line { font-size: 11px; color: #9ca3af; margin-bottom: 10px; line-height: 1.4; }
-    .pill-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; }
-    .pill { flex: 1; min-width: fit-content; text-align: center; padding: 8px 12px; border-radius: 10px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 600; cursor: pointer; }
-    .pill.active { background: #f3f4f6; color: #111827; }
-    .tf-pill { padding: 6px 10px; border-radius: 8px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 700; cursor: pointer; }
-    .tf-pill.active { background: #2563eb; color: #fff; }
-    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
-    .card:active { transform: scale(0.99); border-color: #3b82f6; }
-    .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .sym { font-size: 17px; font-weight: 800; color: #f9fafb; }
-    .tag-demand { background: rgba(16, 185, 129, 0.16); color: #34d399; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
-    .tag-supply { background: rgba(239, 68, 68, 0.16); color: #f87171; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
-    .tag-tf { background: #1e293b; color: #93c5fd; padding: 2px 6px; border-radius: 5px; font-size: 11px; font-weight: 700; margin-right: 5px; }
-    .card-mid { display: flex; justify-content: space-between; font-size: 13px; color: #d1d5db; margin-bottom: 6px; }
-    .inst-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-    .inst-chip { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; }
-    .empty { text-align: center; color: #9ca3af; font-size: 13px; padding: 32px 16px; line-height: 1.5; }
-    .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #0b0f17; z-index: 9999; flex-direction: column; }
-    .modal.open { display: flex; }
-    .modal-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #111827; border-bottom: 1px solid #1f2937; flex-shrink: 0; }
-    #tvChart { flex: 1; width: 100vw; height: calc(100vh - 58px); touch-action: none; }
+    *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+    body{background:#0b0f17;color:#e5e7eb;overflow-x:hidden}
+    .topbar{background:#111827;padding:12px 14px 8px;border-bottom:1px solid #1f2937;position:sticky;top:0;z-index:20}
+    .status-grid{display:flex;justify-content:space-between;font-size:12px;color:#9ca3af;margin-bottom:6px}
+    .status-grid b.ok{color:#10b981}.status-grid b.warn{color:#f59e0b}
+    .page-tabs{display:flex;border-bottom:1px solid #1f2937;background:#111827}
+    .page-tab{flex:1;text-align:center;padding:10px 6px;font-size:13px;font-weight:700;color:#9ca3af;cursor:pointer;border-bottom:3px solid transparent}
+    .page-tab.active{color:#60a5fa;border-bottom-color:#3b82f6}
+    .page-tab .badge{background:#1f2937;color:#e5e7eb;padding:1px 6px;border-radius:10px;font-size:11px;margin-left:4px}
+    .page-tab.active .badge{background:#1d4ed8;color:#fff}
+    .swipe-container{display:flex;width:200vw;transition:transform .28s cubic-bezier(.22,1,.36,1)}
+    .page{width:100vw;min-height:calc(100vh - 95px);padding:12px 14px 40px}
+    .btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+    button{border:none;border-radius:10px;padding:10px;font-size:13px;font-weight:600;cursor:pointer}
+    .btn-primary{background:#2563eb;color:#fff}.btn-secondary{background:#1f2937;color:#e5e7eb;border:1px solid #374151}
+    .btn-toggle{background:#1f2937;color:#f87171;border:1px solid #374151;font-size:12px;padding:8px}.btn-toggle.on{color:#34d399;border-color:#059669}
+    .meta-line{font-size:11px;color:#9ca3af;margin-bottom:10px;line-height:1.4}
+    .pill-row{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px}
+    .pill{flex:1;min-width:fit-content;text-align:center;padding:8px 12px;border-radius:10px;background:#1f2937;color:#9ca3af;font-size:12px;font-weight:600;cursor:pointer}.pill.active{background:#f3f4f6;color:#111827}
+    .tf-pill{padding:6px 10px;border-radius:8px;background:#1f2937;color:#9ca3af;font-size:12px;font-weight:700;cursor:pointer}.tf-pill.active{background:#2563eb;color:#fff}
+    .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer}.card:active{transform:scale(.99);border-color:#3b82f6}
+    .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+    .sym{font-size:17px;font-weight:800;color:#f9fafb}
+    .tag-demand{background:rgba(16,185,129,.16);color:#34d399;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+    .tag-supply{background:rgba(239,68,68,.16);color:#f87171;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+    .tag-tf{background:#1e293b;color:#93c5fd;padding:2px 6px;border-radius:5px;font-size:11px;font-weight:700;margin-right:5px}
+    .card-mid{display:flex;justify-content:space-between;font-size:13px;color:#d1d5db;margin-bottom:6px}
+    .inst-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+    .inst-chip{background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.35);padding:2px 7px;border-radius:6px;font-size:11px;font-weight:600}
+    .empty{text-align:center;color:#9ca3af;font-size:13px;padding:32px 16px;line-height:1.5}
+    .modal{display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0b0f17;z-index:9999;flex-direction:column}.modal.open{display:flex}
+    .modal-hdr{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#111827;border-bottom:1px solid #1f2937;flex-shrink:0}
+    #tvChart{flex:1;width:100vw;height:calc(100vh - 58px);touch-action:none}
   </style>
 </head>
 <body>
   <div class="topbar">
-    <div class="status-grid">
-      <div>Angel One: <b id="angelStatus" class="warn">Checking...</b></div>
-      <div>Market: <b id="marketStatus">--</b></div>
-    </div>
-    <div class="status-grid" style="margin-bottom:4px;">
-      <div>Last Scan: <b id="lastScan">--:--:--</b></div>
-      <div>1D Touches: <b id="touchCount">0</b> | Inst: <b id="instCount">0</b></div>
-    </div>
-    <div id="refreshBanner" style="font-size:11px; color:#60a5fa; display:none; margin-bottom:4px;"></div>
+    <div class="status-grid"><div>Angel One: <b id="angelStatus" class="warn">Checking...</b></div><div>Market: <b id="marketStatus">--</b></div></div>
+    <div class="status-grid" style="margin-bottom:4px;"><div>Last Scan: <b id="lastScan">--:--:--</b></div><div>1D Touches: <b id="touchCount">0</b> | Inst: <b id="instCount">0</b></div></div>
+    <div id="refreshBanner" style="font-size:11px;color:#60a5fa;display:none;margin-bottom:4px;"></div>
   </div>
-
   <div class="page-tabs">
     <div class="page-tab active" id="tab0" onclick="goToPage(0)">1D Demand & Supply <span class="badge" id="badge1d">0</span></div>
     <div class="page-tab" id="tab1" onclick="goToPage(1)">🔥 Inst. Orders (All TF) <span class="badge" id="badgeInst">0</span></div>
   </div>
-
   <div class="swipe-container" id="swipeContainer">
     <div class="page" id="page0">
-      <div class="btn-row">
-        <button class="btn-primary" onclick="triggerScan()">▶ Test Live Scan Now</button>
-        <button class="btn-secondary" onclick="triggerRefresh()">↻ Refresh Zones</button>
-      </div>
-      <div class="btn-row">
-        <button class="btn-toggle" id="soundBtn" onclick="toggleSound()">🔇 Sound: OFF</button>
-        <button class="btn-toggle" id="alertBtn" onclick="toggleAlerts()">🔕 Alerts: OFF</button>
-      </div>
+      <div class="btn-row"><button class="btn-primary" onclick="triggerScan()">▶ Test Live Scan Now</button><button class="btn-secondary" onclick="triggerRefresh()">↻ Refresh Zones</button></div>
+      <div class="btn-row"><button class="btn-toggle" id="soundBtn" onclick="toggleSound()">🔇 Sound: OFF</button><button class="btn-toggle" id="alertBtn" onclick="toggleAlerts()">🔕 Alerts: OFF</button></div>
       <div class="meta-line" id="metaInfo">Loading zones...</div>
-      <div class="pill-row">
-        <div class="pill active" onclick="setFilter1D('ALL', this)">All</div>
-        <div class="pill" onclick="setFilter1D('DEMAND', this)">1D Demand</div>
-        <div class="pill" onclick="setFilter1D('SUPPLY', this)">1D Supply</div>
-      </div>
+      <div class="pill-row"><div class="pill active" onclick="setFilter1D('ALL',this)">All</div><div class="pill" onclick="setFilter1D('DEMAND',this)">1D Demand</div><div class="pill" onclick="setFilter1D('SUPPLY',this)">1D Supply</div></div>
       <div id="list1D"></div>
     </div>
-
     <div class="page" id="page1">
       <div class="meta-line" style="color:#93c5fd;">Tap anywhere on a card for <b>Full-Screen TradingView Chart</b> (Drag & Pinch Zoom).</div>
-      <div class="pill-row">
-        <div class="tf-pill active" onclick="setTfFilter('ALL', this)">All TF</div>
-        <div class="tf-pill" onclick="setTfFilter('5m', this)">5m</div>
-        <div class="tf-pill" onclick="setTfFilter('15m', this)">15m</div>
-        <div class="tf-pill" onclick="setTfFilter('1H', this)">1H</div>
-        <div class="tf-pill" onclick="setTfFilter('1D', this)">1D</div>
-        <div class="tf-pill" onclick="setTfFilter('1W', this)">1W</div>
-      </div>
-      <div class="pill-row">
-        <div class="pill active" onclick="setInstSideFilter('ALL', this)">All Orders</div>
-        <div class="pill" onclick="setInstSideFilter('INST_BUYING', this)">🟢 Inst. Buying</div>
-        <div class="pill" onclick="setInstSideFilter('INST_SELLING', this)">🔴 Inst. Selling</div>
-      </div>
+      <div class="pill-row"><div class="tf-pill active" onclick="setTfFilter('ALL',this)">All TF</div><div class="tf-pill" onclick="setTfFilter('5m',this)">5m</div><div class="tf-pill" onclick="setTfFilter('15m',this)">15m</div><div class="tf-pill" onclick="setTfFilter('1H',this)">1H</div><div class="tf-pill" onclick="setTfFilter('1D',this)">1D</div><div class="tf-pill" onclick="setTfFilter('1W',this)">1W</div></div>
+      <div class="pill-row"><div class="pill active" onclick="setInstSideFilter('ALL',this)">All Orders</div><div class="pill" onclick="setInstSideFilter('INST_BUYING',this)">🟢 Inst. Buying</div><div class="pill" onclick="setInstSideFilter('INST_SELLING',this)">🔴 Inst. Selling</div></div>
       <div id="listInst"></div>
     </div>
   </div>
-
   <div class="modal" id="chartModal">
-    <div class="modal-hdr">
-      <div>
-        <b id="mTitle" style="font-size:16px; color:#f9fafb;">--</b>
-        <div id="mSub" style="font-size:11px; color:#9ca3af;">Loading full-screen chart...</div>
-      </div>
-      <button class="btn-secondary" style="padding:8px 14px;" onclick="closeChart()">✕ Close</button>
-    </div>
+    <div class="modal-hdr"><div><b id="mTitle" style="font-size:16px;color:#f9fafb;">--</b><div id="mSub" style="font-size:11px;color:#9ca3af;">Loading chart...</div></div><button class="btn-secondary" style="padding:8px 14px;" onclick="closeChart()">✕ Close</button></div>
     <div id="tvChart"></div>
   </div>
-
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
     </html>
