@@ -1,37 +1,34 @@
-import json
-import os
-from typing import Dict, List
+import json, os, requests
 
-
-def load_fno_universe() -> List[Dict]:
-    """
-    Loads F&O stock list from fno_stocks.json in the project root.
-    Supports list of dicts or dict mapping symbol -> token.
-    """
-    paths = ["fno_stocks.json", os.path.join("data", "fno_stocks.json")]
-    for p in paths:
+def load_fno_universe():
+    out, seen = [], set()
+    for p in ("fno_stocks.json", "data/fno_stocks.json"):
         if os.path.exists(p):
             try:
-                with open(p, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                out: List[Dict] = []
-                if isinstance(raw, list):
-                    for item in raw:
-                        if isinstance(item, dict):
-                            sym = item.get("symbol") or item.get("name") or item.get("tradingsymbol") or ""
-                            tok = str(item.get("token") or item.get("symboltoken") or item.get("symbolToken") or "")
-                            if sym and tok:
-                                out.append({"symbol": sym, "token": tok})
-                elif isinstance(raw, dict):
-                    for sym, val in raw.items():
-                        if isinstance(val, dict):
-                            tok = str(val.get("token") or val.get("symboltoken") or "")
-                        else:
-                            tok = str(val)
-                        if sym and tok:
-                            out.append({"symbol": sym, "token": tok})
-                if out:
-                    return out
+                raw = json.load(open(p, "r", encoding="utf-8"))
+                items = raw if isinstance(raw, list) else [{"symbol": k, **(v if isinstance(v, dict) else {"token": v})} for k, v in raw.items()]
+                for it in items:
+                    if not isinstance(it, dict): continue
+                    sym = str(it.get("symbol") or it.get("name") or it.get("tradingsymbol") or it.get("sym") or "").strip()
+                    tok = str(it.get("token") or it.get("symboltoken") or it.get("symbolToken") or it.get("tok") or "").strip()
+                    if sym and tok and sym not in seen:
+                        seen.add(sym)
+                        out.append({"symbol": sym, "token": tok})
             except Exception:
                 pass
-    return []
+    if out:
+        return out
+
+    try:
+        r = requests.get("https://angelbroking.com", timeout=20)
+        data = r.json()
+        fno_names = {d["name"] for d in data if d.get("exch_seg") == "NFO" and d.get("instrumenttype") == "FUTSTK" and d.get("name")}
+        for d in data:
+            if d.get("exch_seg") == "NSE" and d.get("symbol", "").endswith("-EQ") and d.get("name") in fno_names:
+                nm = d["name"]
+                if nm not in seen:
+                    seen.add(nm)
+                    out.append({"symbol": nm, "token": str(d["token"])})
+    except Exception:
+        pass
+    return out
