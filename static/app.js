@@ -1,4 +1,4 @@
-let curPage=0,f1D="ALL",fTF="ALL",fSide="ALL",snd=false,alr=false,st=null,chart=null,sx=0,sy=0;
+let curPage=0,f1D="ALL",fTF="ALL",fSide="ALL",snd=false,alr=false,st=null,chart=null,sx=0,sy=0,seenAlerts=new Set();
 const box=document.getElementById("swipeContainer");
 document.addEventListener("touchstart",e=>{if(!document.getElementById("chartModal").classList.contains("open")){sx=e.changedTouches.screenX;sy=e.changedTouches.screenY;}},{passive:true});
 document.addEventListener("touchend",e=>{if(document.getElementById("chartModal").classList.contains("open"))return;const dx=e.changedTouches.screenX-sx,dy=e.changedTouches.screenY-sy;if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.4){if(dx<0&&curPage===0)goToPage(1);if(dx>0&&curPage===1)goToPage(0);}},{passive:true});
@@ -6,12 +6,17 @@ function goToPage(i){curPage=i;box.style.transform=`translateX(-${i*100}vw)`;doc
 function setFilter1D(v,el){f1D=v;el.parentElement.querySelectorAll(".pill").forEach(p=>p.classList.remove("active"));el.classList.add("active");renderAll();}
 function setTfFilter(v,el){fTF=v;el.parentElement.querySelectorAll(".tf-pill").forEach(p=>p.classList.remove("active"));el.classList.add("active");renderAll();}
 function setInstSideFilter(v,el){fSide=v;el.parentElement.querySelectorAll(".pill").forEach(p=>p.classList.remove("active"));el.classList.add("active");renderAll();}
-function toggleSound(){snd=!snd;const b=document.getElementById("soundBtn");b.textContent=snd?"🔊 Sound: ON":"🔇 Sound: OFF";b.classList.toggle("on",snd);}
+function playBeep(){try{const c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.type="sine";o.frequency.value=880;g.gain.value=0.25;o.connect(g);g.connect(c.destination);o.start();setTimeout(()=>{o.frequency.value=1175;},150);setTimeout(()=>{o.stop();c.close();},350);}catch(e){}}
+function toggleSound(){snd=!snd;if(snd)playBeep();const b=document.getElementById("soundBtn");b.textContent=snd?"🔊 Sound: ON":"🔇 Sound: OFF";b.classList.toggle("on",snd);}
 function toggleAlerts(){alr=!alr;if(alr&&"Notification"in window)Notification.requestPermission();const b=document.getElementById("alertBtn");b.textContent=alr?"🔔 Alerts: ON":"🔕 Alerts: OFF";b.classList.toggle("on",alr);}
+function notifyNewTouches(list){
+  let isNew=false;
+  list.forEach(t=>{const k=`${t.symbol}:${t.zone_type}:${t.zone_low}`;if(!seenAlerts.has(k)){seenAlerts.add(k);isNew=true;if(alr&&"Notification"in window&&Notification.permission==="granted"){new Notification(`🚨 1D ${t.zone_type}: ${t.symbol} @ ₹${t.ltp}`,{body:`Zone ₹${t.zone_low} – ₹${t.zone_high}`});}}});
+  if(isNew&&snd)playBeep();
+}
 async function triggerScan(){await fetch("/api/scan",{method:"POST"});fetchState();}
 async function triggerRefresh(){await fetch("/api/refresh",{method:"POST"});fetchState();}
 function closeChart(){document.getElementById("chartModal").classList.remove("open");if(chart){chart.remove();chart=null;}}
-function toUnix(s){const m=String(s).match(/(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);return m?Math.floor(Date.UTC(+m[1],+m[2]-1,+m[3],+(m[4]||0),+(m[5]||0))/1000):NaN;}
 async function openChart(sym,tf,zt,zl,zh,ltp,ex){
   const m=document.getElementById("chartModal"),el=document.getElementById("tvChart");
   document.getElementById("mTitle").textContent=`${sym} (${tf}) • ₹${ltp}`;
@@ -24,15 +29,17 @@ async function openChart(sym,tf,zt,zl,zh,ltp,ex){
     el.innerHTML="";
     chart=LightweightCharts.createChart(el,{width:el.offsetWidth||window.innerWidth,height:el.offsetHeight||(window.innerHeight-58),layout:{background:{type:"solid",color:"#0b0f17"},textColor:"#d1d5db"},grid:{vertLines:{color:"#1f2937"},horzLines:{color:"#1f2937"}},rightPriceScale:{borderColor:"#374151"},timeScale:{borderColor:"#374151",timeVisible:tf!=="1D"&&tf!=="1W"},handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:true},handleScale:{axisPressedMouseMove:true,mouseWheel:true,pinch:true}});
     const cs=chart.addCandlestickSeries({upColor:"#10b981",downColor:"#ef4444",borderUpColor:"#10b981",borderDownColor:"#ef4444",wickUpColor:"#10b981",wickDownColor:"#ef4444"});
-    const seen=new Set(),bars=[];
-    raw.forEach(c=>{const t=toUnix(c.t);if(!isNaN(t)&&!seen.has(t)){seen.add(t);bars.push({time:t,open:+c.o,high:+c.h,low:+c.l,close:+c.c});}});
-    bars.sort((a,b)=>a.time-b.time);cs.setData(bars);
+    const baseTs=Math.floor(Date.now()/1000)-raw.length*86400;
+    const bars=raw.map((c,idx)=>{const parsed=Date.parse(String(c.t).replace(" ","T")+"Z");const t=!isNaN(parsed)?Math.floor(parsed/1000):(baseTs+idx*86400);return {time:t,open:+c.o,high:+c.h,low:+c.l,close:+c.c};});
+    bars.sort((a,b)=>a.time-b.time);
+    const uniq=[];bars.forEach(b=>{if(!uniq.length||b.time>uniq[uniq.length-1].time)uniq.push(b);});
+    cs.setData(uniq);
     const col=zt==="DEMAND"?"#10b981":"#ef4444";
     cs.createPriceLine({price:+zh,color:col,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:`${zt} TOP`});
     cs.createPriceLine({price:+zl,color:col,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:`${zt} BOT`});
     cs.createPriceLine({price:+ltp,color:"#60a5fa",lineWidth:1,lineStyle:2,axisLabelVisible:true,title:"LTP"});
     chart.timeScale().fitContent();
-  }catch(e){el.innerHTML=`<div style="padding:40px;text-align:center;color:#f87171;">Error: ${e&&e.message?e.message:e}</div>`;}
+  }catch(e){el.innerHTML=`<div style="padding:40px;text-align:center;color:#f87171;">Chart Error: ${e&&e.message?e.message:e}</div>`;}
 }
 function renderAll(){
   if(!st)return;
@@ -40,6 +47,7 @@ function renderAll(){
   const mk=document.getElementById("marketStatus");mk.textContent=st.market_open?"OPEN":"CLOSED";mk.style.color=st.market_open?"#10b981":"#f87171";
   document.getElementById("lastScan").textContent=st.last_scan||"--:--:--";
   const t1=st.touches||[],inst=st.institutional||[];
+  notifyNewTouches(t1);
   document.getElementById("touchCount").textContent=t1.length;document.getElementById("instCount").textContent=inst.length;
   document.getElementById("badge1d").textContent=t1.length;document.getElementById("badgeInst").textContent=inst.length;
   const bn=document.getElementById("refreshBanner");bn.style.display=st.is_refreshing?"block":"none";if(st.is_refreshing)bn.textContent=`Refreshing Zones... ${st.refresh_progress}`;
