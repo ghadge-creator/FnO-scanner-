@@ -1,9 +1,10 @@
 let currentPage = 0, filter1D = "ALL", filterTF = "ALL", filterInstSide = "ALL";
-let soundOn = false, alertsOn = false, latestState = null;
+let soundOn = false, alertsOn = false, latestState = null, tvChartObj = null;
 let touchStartX = 0, touchStartY = 0;
 const container = document.getElementById("swipeContainer");
 
 document.addEventListener("touchstart", (e) => {
+  if (document.getElementById("chartModal").classList.contains("open")) return;
   touchStartX = e.changedTouches.screenX;
   touchStartY = e.changedTouches.screenY;
 }, { passive: true });
@@ -63,7 +64,11 @@ function toggleAlerts() {
 
 async function triggerScan() { await fetch("/api/scan", { method: "POST" }); fetchState(); }
 async function triggerRefresh() { await fetch("/api/refresh", { method: "POST" }); fetchState(); }
-function closeChart() { document.getElementById("chartModal").classList.remove("open"); }
+
+function closeChart() {
+  document.getElementById("chartModal").classList.remove("open");
+  if (tvChartObj) { tvChartObj.remove(); tvChartObj = null; }
+}
 
 async function openChart(sym, tf, zType, zLow, zHigh, ltp, extraText) {
   const modal = document.getElementById("chartModal");
@@ -71,71 +76,58 @@ async function openChart(sym, tf, zType, zLow, zHigh, ltp, extraText) {
   document.getElementById("mSub").textContent = `${zType} Zone: ₹${zLow} – ₹${zHigh} ${extraText ? "• " + extraText : ""}`;
   modal.classList.add("open");
 
-  const canvas = document.getElementById("zoneCanvas");
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#9ca3af";
-  ctx.font = "13px sans-serif";
-  ctx.fillText("Loading live candlesticks...", 130, 135);
+  const chartEl = document.getElementById("tvChart");
+  chartEl.innerHTML = "";
+  if (tvChartObj) { tvChartObj.remove(); tvChartObj = null; }
 
   try {
     const res = await fetch(`/api/chart/${encodeURIComponent(sym)}?tf=${encodeURIComponent(tf)}`);
     const data = await res.json();
-    drawChart(ctx, canvas.width, canvas.height, data.candles || [], zType, zLow, zHigh, ltp);
+    const raw = data.candles || [];
+    if (!raw.length) {
+      chartEl.innerHTML = `<div style="padding:40px;text-align:center;color:#9ca3af;">No candle data available right now.</div>`;
+      return;
+    }
+
+    tvChartObj = LightweightCharts.createChart(chartEl, {
+      width: chartEl.clientWidth,
+      height: chartEl.clientHeight,
+      layout: { background: { color: "#0b0f17" }, textColor: "#d1d5db" },
+      grid: { vertLines: { color: "#1f2937" }, horzLines: { color: "#1f2937" } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#374151" },
+      timeScale: { borderColor: "#374151", timeVisible: tf !== "1D" && tf !== "1W" },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+    });
+
+    const candleSeries = tvChartObj.addCandlestickSeries({
+      upColor: "#10b981", downColor: "#ef4444",
+      borderUpColor: "#10b981", borderDownColor: "#ef4444",
+      wickUpColor: "#10b981", wickDownColor: "#ef4444",
+    });
+
+    const seenT = new Set();
+    const bars = [];
+    raw.forEach((c) => {
+      const ts = Math.floor(new Date(c.t.replace(" ", "T")).getTime() / 1000);
+      if (!isNaN(ts) && !seenT.has(ts)) {
+        seenT.add(ts);
+        bars.push({ time: ts, open: c.o, high: c.h, low: c.l, close: c.c });
+      }
+    });
+    bars.sort((a, b) => a.time - b.time);
+    candleSeries.setData(bars);
+
+    const zColor = zType === "DEMAND" ? "#10b981" : "#ef4444";
+    candleSeries.createPriceLine({ price: zHigh, color: zColor, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${zType} TOP` });
+    candleSeries.createPriceLine({ price: zLow, color: zColor, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${zType} BOT` });
+    candleSeries.createPriceLine({ price: ltp, color: "#60a5fa", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "LTP" });
+
+    tvChartObj.timeScale().fitContent();
   } catch (e) {
-    ctx.fillText("Could not load chart", 150, 135);
+    chartEl.innerHTML = `<div style="padding:40px;text-align:center;color:#f87171;">Error loading interactive chart.</div>`;
   }
-}
-
-function drawChart(ctx, w, h, candles, zType, zLow, zHigh, ltp) {
-  ctx.clearRect(0, 0, w, h);
-  if (!candles.length) {
-    ctx.fillStyle = "#9ca3af";
-    ctx.fillText("No candles available right now", 120, 135);
-    return;
-  }
-  const padL = 12, padR = 54, padT = 16, padB = 22;
-  const cw = w - padL - padR, ch = h - padT - padB;
-  let minP = Math.min(zLow, ...candles.map((c) => c.l));
-  let maxP = Math.max(zHigh, ...candles.map((c) => c.h));
-  const margin = (maxP - minP) * 0.08 || 1;
-  minP -= margin; maxP += margin;
-  const yOf = (p) => padT + ((maxP - p) / (maxP - minP)) * ch;
-
-  const yTop = yOf(zHigh), yBot = yOf(zLow);
-  ctx.fillStyle = zType === "DEMAND" ? "rgba(16,185,129,0.22)" : "rgba(239,68,68,0.22)";
-  ctx.fillRect(padL, yTop, cw, Math.max(4, yBot - yTop));
-  ctx.strokeStyle = zType === "DEMAND" ? "#10b981" : "#ef4444";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(padL, yTop, cw, Math.max(4, yBot - yTop));
-
-  const step = cw / candles.length;
-  const bodyW = Math.max(3, step * 0.62);
-  candles.forEach((c, i) => {
-    const x = padL + i * step + step / 2;
-    const up = c.c >= c.o;
-    ctx.strokeStyle = up ? "#10b981" : "#ef4444";
-    ctx.fillStyle = up ? "#10b981" : "#ef4444";
-    ctx.beginPath();
-    ctx.moveTo(x, yOf(c.h));
-    ctx.lineTo(x, yOf(c.l));
-    ctx.stroke();
-    const topB = yOf(Math.max(c.o, c.c));
-    const botB = yOf(Math.min(c.o, c.c));
-    ctx.fillRect(x - bodyW / 2, topB, bodyW, Math.max(1.5, botB - topB));
-  });
-
-  const yLtp = yOf(ltp);
-  ctx.setLineDash([4, 4]);
-  ctx.strokeStyle = "#60a5fa";
-  ctx.beginPath(); ctx.moveTo(padL, yLtp); ctx.lineTo(padL + cw, yLtp); ctx.stroke();
-  ctx.setLineDash([]);
-
-  ctx.fillStyle = "#9ca3af";
-  ctx.font = "10px sans-serif";
-  [maxP, zHigh, zLow, minP].forEach((p) => ctx.fillText(p.toFixed(1), padL + cw + 4, yOf(p) + 3));
-  ctx.fillStyle = "#60a5fa";
-  ctx.fillText(ltp.toFixed(1), padL + cw + 4, yLtp + 3);
 }
 
 function renderAll() {
@@ -158,10 +150,10 @@ function renderAll() {
 
   const banner = document.getElementById("refreshBanner");
   banner.style.display = s.is_refreshing ? "block" : "none";
-  if (s.is_refreshing) banner.textContent = `Refreshing Multi-TF Zones... ${s.refresh_progress}`;
+  if (s.is_refreshing) banner.textContent = `Refreshing Zones... ${s.refresh_progress}`;
 
   document.getElementById("metaInfo").textContent =
-    `${s.total_zones_1d} 1D zones (${s.demand_zones_1d} demand / ${s.supply_zones_1d} supply) • ${s.total_zones_mtf || 0} All-TF zones • tap any card for chart`;
+    `${s.total_zones_1d} 1D zones (${s.demand_zones_1d} demand / ${s.supply_zones_1d} supply) • ${s.total_zones_mtf || 0} All-TF zones • tap card for chart`;
 
   const list1D = document.getElementById("list1D");
   const filtered1D = touches.filter((t) => filter1D === "ALL" || t.zone_type === filter1D);
