@@ -1,314 +1,233 @@
-"""Core engine: zone pre-calculation, live touch scanning, test scan."""
 import threading
 import time
-from datetime import datetime, time as dtime
-
-import pandas as pd
+from datetime import datetime
+from typing import Dict, List, Optional
 import pytz
-from logzero import logger
 
-from . import config, db, feeds, notifier
-from .angel import AngelClient
-from .universe import load_universe
-from .zones import detect_zones, in_zone, is_hit
+from app.angel import angel_client
+from app.universe import load_fno_universe
+from app.zones import detect_zones_from_df, evaluate_institutional_footprint
+from app.notifier import send_alert
 
 IST = pytz.timezone("Asia/Kolkata")
 
 
-def now_ist() -> datetime:
-    return datetime.now(IST)
-
-
-def market_open(now: datetime = None) -> bool:
-    now = now or now_ist()
-    if now.weekday() >= 5:
-        return False
-    return dtime(9, 15) <= now.time() <= dtime(15, 30)
-
-
-class Engine:
+class ScannerEngine:
     def __init__(self):
-        self.angel = AngelClient()
-        self.universe = []
-        self.zone_cache = {}
-        self.quotes = {}
-        self.last_scan = None
-        self.source = "-"
-        self.ready = False
-        self.refreshing = False
-        self.progress = (0, 0)
-        self._flag = threading.Lock()
-        self._last_login_try = 0.0
+        self.universe: List[Dict] = load_fno_universe()
+        self.zones_1d: List[Dict] = []
+        self.zones_mtf: List[Dict] = []  # 5m, 15m, 1H, 1D, 1W
+        self.avg_vol_map: Dict[str, float] = {}
+        self.active_touches_1d: List[Dict] = []
+        self.institutional_signals: List[Dict] = []
+        self.is_refreshing: bool = False
+        self.refresh_progress: str = "0/0"
+        self.last_zone_update: str = "--:--:--"
+        self.last_scan_time: str = "--:--:--"
+        self.alerted_keys: set = set()
+        self._lock = threading.Lock()
 
-    # ---------- lifecycle ----------
-    def startup(self):
-        try:
-            self.reload_universe()
-            self.login()
-            self.load_zone_cache()
-            today = now_ist().strftime("%Y-%m-%d")
-            updated = (db.get_meta("zones_updated") or "")[:10]
-            if not self.zone_cache or updated != today:
-                self.refresh_zones_async()
-        except Exception:
-            logger.exception("startup failed")
-        finally:
-            self.ready = True
-
-    def reload_universe(self):
-        self.universe = load_universe()
-        logger.info("Universe size: %d", len(self.universe))
-
-    def login(self) -> bool:
-        self._last_login_try = time.time()
-        return self.angel.login()
-
-    # ---------- stage 1: zone pre-calculation ----------
-    def load_zone_cache(self):
-        cache = {}
-        with db.conn() as c:
-            for r in c.execute("SELECT * FROM zones"):
-                cache.setdefault(r["symbol"], []).append(dict(r))
-        self.zone_cache = cache
-
-    def refresh_zones_async(self) -> bool:
-        if self.refreshing:
+    def is_market_open(self) -> bool:
+        now = datetime.now(IST)
+        if now.weekday() >= 5:
             return False
-        threading.Thread(target=self.refresh_zones, daemon=True).start()
-        return True
+        t = now.hour * 60 + now.minute
+        return (9 * 60 + 15) <= t <= (15 * 60 + 30)
 
-    def refresh_zones(self) -> bool:
-        with self._flag:
-            if self.refreshing:
-                return False
-            self.refreshing = True
+    def refresh_all_zones(self, include_intraday_tf: bool = True):
+        if self.is_refreshing:
+            return
+        self.is_refreshing = True
+        total = len(self.universe)
+        new_1d: List[Dict] = []
+        new_mtf: List[Dict] = []
+        new_avg_vol: Dict[str, float] = {}
+
+        tf_specs = [("ONE_DAY", "1D", 220)]
+        if include_intraday_tf:
+            tf_specs.extend(
+                [
+                    ("ONE_WEEK", "1W", 450),
+                    ("ONE_HOUR", "1H", 45),
+                    ("FIFTEEN_MINUTE", "15m", 12),
+                    ("FIVE_MINUTE", "5m", 5),
+                ]
+            )
+
         try:
-            if not self.universe:
-                self.reload_universe()
-            stocks = self.universe
-            total = len(stocks)
-            self.progress = (0, total)
-            today = now_ist().strftime("%Y-%m-%d")
-            candles = {}
+            angel_client.login()
+            for idx, item in enumerate(self.universe, start=1):
+                self.refresh_progress = f"{idx}/{total}"
+                sym = item["symbol"]
+                tok = str(item.get("token", ""))
+                if not tok:
+                    continue
 
-            if self.angel.connected:
-                for idx, s in enumerate(stocks):
-                    rows = self.angel.daily_candles(s["token"]) if s.get("token") else None
-                    if rows:
-                        candles[s["symbol"]] = rows
-                    self.progress = (idx + 1, total)
-                    time.sleep(0.4)  # respect Angel One rate limits
-
-            missing = [s for s in stocks if s["symbol"] not in candles]
-            if missing:
-                logger.info("Fetching %d stocks via yfinance fallback", len(missing))
-                candles.update(feeds.yf_history(missing))
-            self.progress = (total, total)
-
-            n_zones = 0
-            with db.conn() as c:
-                for sym, rows in candles.items():
-                    if len(rows) < 30:
+                for interval, tf_label, days in tf_specs:
+                    df = angel_client.get_historical_candles(
+                        symbol_token=tok,
+                        interval=interval,
+                        days=days,
+                        exchange="NFO",
+                    )
+                    if df is None or df.empty:
                         continue
-                    c.execute("DELETE FROM candles WHERE symbol=?", (sym,))
-                    c.executemany(
-                        "INSERT OR REPLACE INTO candles(symbol,d,o,h,l,c) VALUES (?,?,?,?,?,?)",
-                        [(sym,) + tuple(r) for r in rows],
+
+                    if tf_label == "1D" and len(df) >= 5:
+                        new_avg_vol[sym] = float(df["volume"].tail(20).mean())
+
+                    detected = detect_zones_from_df(
+                        df,
+                        timeframe=tf_label,
+                        max_zones_per_side=2,
+                        lookback_candles=150,
                     )
-                    df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close"])
-                    df = df[df["date"] < today]  # completed candles up to yesterday
-                    zones = detect_zones(df)
-                    c.execute("DELETE FROM zones WHERE symbol=?", (sym,))
-                    c.executemany(
-                        "INSERT INTO zones(symbol,side,pattern,proximal,distal,freshness,touches,formed)"
-                        " VALUES (?,?,?,?,?,?,?,?)",
-                        [
-                            (sym, z["side"], z["pattern"], z["proximal"], z["distal"],
-                             z["freshness"], z["touches"], z["formed"])
-                            for z in zones
-                        ],
-                    )
-                    n_zones += len(zones)
-            db.set_meta("zones_updated", now_ist().strftime("%Y-%m-%d %H:%M:%S"))
-            self.load_zone_cache()
-            logger.info("Zones refreshed: %d zones across %d stocks", n_zones, len(candles))
-            return True
-        except Exception:
-            logger.exception("refresh_zones failed")
-            return False
+                    for z in detected:
+                        z["symbol"] = sym
+                        z["token"] = tok
+                        if tf_label == "1D":
+                            new_1d.append(z)
+                        new_mtf.append(z)
+
+                    time.sleep(0.22)
+
+            with self._lock:
+                if new_1d:
+                    self.zones_1d = new_1d
+                if new_mtf:
+                    self.zones_mtf = new_mtf
+                if new_avg_vol:
+                    self.avg_vol_map.update(new_avg_vol)
+                self.last_zone_update = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         finally:
-            self.refreshing = False
+            self.is_refreshing = False
+            self.refresh_progress = f"{total}/{total}"
 
-    # ---------- stage 2: live touch detection ----------
-    def _fetch_quotes(self) -> dict:
-        stocks = self.universe
-        if self.angel.connected:
-            tok2sym = {s["token"]: s["symbol"] for s in stocks if s.get("token")}
-            raw = self.angel.quotes(list(tok2sym))
-            out = {tok2sym[t]: q for t, q in raw.items() if t in tok2sym}
-            if out:
-                self.source = "Angel One"
-                return out
-            logger.warning("Angel One quotes empty; using yfinance for this cycle")
-        self.source = "yfinance"
-        return feeds.yf_quotes(stocks)
+    def run_live_scan(self, force: bool = False):
+        if not force and not self.is_market_open():
+            return
 
-    def scan_live(self):
-        if not self.ready or not market_open():
+        if not self.zones_1d and not self.is_refreshing:
+            threading.Thread(target=self.refresh_all_zones, daemon=True).start()
             return
-        if not self.universe or not self.zone_cache:
-            return
-        if (
-            not self.angel.connected
-            and config.angel_configured()
-            and time.time() - self._last_login_try > 120
-        ):
-            self.login()
-        try:
-            quotes = self._fetch_quotes()
-        except Exception:
-            logger.exception("quote fetch failed")
-            return
+
+        tokens = [str(u["token"]) for u in self.universe if u.get("token")]
+        quotes = angel_client.get_full_quotes(tokens, exchange="NFO")
         if not quotes:
             return
-        self.quotes = quotes
-        self.last_scan = now_ist()
-        self._evaluate(quotes)
 
-    def _evaluate(self, quotes: dict):
-        now = now_ist()
-        day, ts = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d %H:%M:%S")
-        new_hits = []
-        with db.conn() as c:
-            for sym, q in quotes.items():
-                ltp = q.get("ltp") or 0
-                if ltp <= 0:
-                    continue
-                high = q.get("high") or ltp
-                low = q.get("low") or ltp
-                for z in self.zone_cache.get(sym, []):
-                    if not is_hit(z, ltp, high, low):
-                        continue
-                    key = f"{z['side']}:{z['proximal']}:{z['distal']}"
-                    cur = c.execute(
-                        "INSERT OR IGNORE INTO touches(day,symbol,zone_key,side,pattern,proximal,"
-                        "distal,freshness,first_ts) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (day, sym, key, z["side"], z["pattern"], z["proximal"],
-                         z["distal"], z["freshness"], ts),
-                    )
-                    if cur.rowcount == 1:
-                        new_hits.append(
-                            {"symbol": sym, "side": z["side"], "pattern": z["pattern"],
-                             "proximal": z["proximal"], "distal": z["distal"],
-                             "freshness": z["freshness"], "ltp": ltp, "high": high,
-                             "low": low, "time": now.strftime("%H:%M:%S")}
-                        )
-        for hit in new_hits:
-            logger.info("TOUCH %s %s %s", hit["symbol"], hit["side"], hit["pattern"])
-            notifier.alert_touch(hit)
+        now_str = datetime.now(IST).strftime("%H:%M:%S")
+        today_key = datetime.now(IST).strftime("%Y-%m-%d")
+        touches_1d: List[Dict] = []
+        inst_hits: List[Dict] = []
 
-    # ---------- views ----------
-    def live_touches(self) -> list:
-        day = now_ist().strftime("%Y-%m-%d")
-        with db.conn() as c:
-            rows = c.execute(
-                "SELECT * FROM touches WHERE day=? ORDER BY first_ts DESC", (day,)
-            ).fetchall()
-        out = []
-        for r in rows:
-            q = self.quotes.get(r["symbol"], {})
-            z = {"side": r["side"], "proximal": r["proximal"], "distal": r["distal"]}
-            out.append(
-                {
-                    "id": f"{r['day']}|{r['symbol']}|{r['zone_key']}",
-                    "symbol": r["symbol"],
-                    "side": r["side"],
-                    "pattern": r["pattern"],
-                    "proximal": r["proximal"],
-                    "distal": r["distal"],
-                    "freshness": r["freshness"],
-                    "ltp": q.get("ltp"),
-                    "high": q.get("high"),
-                    "low": q.get("low"),
-                    "time": r["first_ts"][11:19],
-                    "in_zone": in_zone(z, q.get("ltp")),
-                }
-            )
-        return out
-
-    def test_scan(self):
-        """After-market test: latest stored daily candle acts as 'today'."""
-        with db.conn() as c:
-            rows = [tuple(r) for r in c.execute(
-                "SELECT symbol,d,o,h,l,c FROM candles ORDER BY symbol,d")]
-        if not rows:
-            return None
-        df = pd.DataFrame(rows, columns=["symbol", "date", "open", "high", "low", "close"])
-        out = []
-        for sym, g in df.groupby("symbol"):
-            g = g.reset_index(drop=True)
-            if len(g) < 31:
+        # 1) Screen 1: Original 1D Demand & Supply Zone Touches (100% intact)
+        for z in self.zones_1d:
+            tok = str(z.get("token", ""))
+            q = quotes.get(tok)
+            if not q or q.get("ltp", 0) <= 0:
                 continue
-            last = g.iloc[-1]
-            ltp, high, low = float(last["close"]), float(last["high"]), float(last["low"])
-            for z in detect_zones(g.iloc[:-1]):
-                if is_hit(z, ltp, high, low):
-                    out.append(
+            ltp = q["ltp"]
+            z_low = z["zone_low"]
+            z_high = z["zone_high"]
+            buffer = (z_high - z_low) * 0.15
+
+            if (z_low - buffer) <= ltp <= (z_high + buffer):
+                fp = evaluate_institutional_footprint(
+                    ltp=ltp,
+                    day_open=q.get("open", ltp),
+                    day_high=q.get("high", ltp),
+                    day_low=q.get("low", ltp),
+                    day_volume=q.get("volume", 0),
+                    avg_daily_vol=self.avg_vol_map.get(z["symbol"], 0),
+                    tot_buy_qty=q.get("tot_buy_qty", 0),
+                    tot_sell_qty=q.get("tot_sell_qty", 0),
+                    zone_type=z["zone_type"],
+                )
+                hit = {
+                    **z,
+                    "ltp": round(ltp, 2),
+                    "touched_at": now_str,
+                    "institutional": fp,
+                }
+                touches_1d.append(hit)
+
+                alert_id = f"{today_key}:1D:{z['symbol']}:{z['zone_type']}:{z_low}"
+                if alert_id not in self.alerted_keys:
+                    self.alerted_keys.add(alert_id)
+                    try:
+                        send_alert(
+                            f"1D {z['zone_type']} Touch: {z['symbol']} @ {ltp}",
+                            f"Zone {z_low} - {z_high}",
+                        )
+                    except Exception:
+                        pass
+
+        # 2) Screen 2: All-Timeframe (5m, 15m, 1H, 1D, 1W) Institutional Buying & Selling
+        source_zones = self.zones_mtf if self.zones_mtf else self.zones_1d
+        for z in source_zones:
+            tok = str(z.get("token", ""))
+            q = quotes.get(tok)
+            if not q or q.get("ltp", 0) <= 0:
+                continue
+            ltp = q["ltp"]
+            z_low = z["zone_low"]
+            z_high = z["zone_high"]
+            buffer = (z_high - z_low) * 0.20
+
+            if (z_low - buffer) <= ltp <= (z_high + buffer):
+                fp = evaluate_institutional_footprint(
+                    ltp=ltp,
+                    day_open=q.get("open", ltp),
+                    day_high=q.get("high", ltp),
+                    day_low=q.get("low", ltp),
+                    day_volume=q.get("volume", 0),
+                    avg_daily_vol=self.avg_vol_map.get(z["symbol"], 0),
+                    tot_buy_qty=q.get("tot_buy_qty", 0),
+                    tot_sell_qty=q.get("tot_sell_qty", 0),
+                    zone_type=z["zone_type"],
+                )
+                if fp.get("is_institutional"):
+                    inst_hits.append(
                         {
-                            "id": f"test|{sym}|{z['side']}:{z['proximal']}:{z['distal']}",
-                            "symbol": sym, "side": z["side"], "pattern": z["pattern"],
-                            "proximal": z["proximal"], "distal": z["distal"],
-                            "freshness": z["freshness"], "ltp": ltp, "high": high,
-                            "low": low, "time": str(last["date"]),
-                            "in_zone": in_zone(z, ltp),
+                            **z,
+                            "ltp": round(ltp, 2),
+                            "touched_at": now_str,
+                            "inst_side": fp["inst_side"],
+                            "inst_score": fp["inst_score"],
+                            "vol_ratio": fp["vol_ratio"],
+                            "buy_sell_ratio": fp["buy_sell_ratio"],
+                            "sell_buy_ratio": fp["sell_buy_ratio"],
+                            "reasons": fp["reasons"],
                         }
                     )
-        out.sort(key=lambda t: (t["side"], t["symbol"]))
-        return out
 
-    def chart_data(self, symbol: str, live: bool) -> list:
-        with db.conn() as c:
-            rows = c.execute(
-                "SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)
-            ).fetchall()
-        candles = [
-            {"time": r["d"], "open": r["o"], "high": r["h"], "low": r["l"], "close": r["c"]}
-            for r in rows
-        ]
-        q = self.quotes.get(symbol)
-        if live and q and market_open() and q.get("ltp"):
-            today = now_ist().strftime("%Y-%m-%d")
-            bar = {
-                "time": today,
-                "open": q.get("open") or q["ltp"],
-                "high": q.get("high") or q["ltp"],
-                "low": q.get("low") or q["ltp"],
-                "close": q["ltp"],
+        inst_hits.sort(key=lambda x: x.get("inst_score", 0), reverse=True)
+
+        with self._lock:
+            self.active_touches_1d = touches_1d
+            self.institutional_signals = inst_hits
+            self.last_scan_time = now_str
+
+    def get_state(self) -> Dict:
+        with self._lock:
+            d_cnt = sum(1 for z in self.zones_1d if z["zone_type"] == "DEMAND")
+            s_cnt = sum(1 for z in self.zones_1d if z["zone_type"] == "SUPPLY")
+            return {
+                "angel_connected": angel_client.connected,
+                "angel_status": angel_client.status_msg,
+                "market_open": self.is_market_open(),
+                "last_scan": self.last_scan_time,
+                "last_zone_update": self.last_zone_update,
+                "is_refreshing": self.is_refreshing,
+                "refresh_progress": self.refresh_progress,
+                "total_zones_1d": len(self.zones_1d),
+                "demand_zones_1d": d_cnt,
+                "supply_zones_1d": s_cnt,
+                "total_zones_mtf": len(self.zones_mtf),
+                "touches": self.active_touches_1d,
+                "institutional": self.institutional_signals,
             }
-            if candles and candles[-1]["time"] == today:
-                candles[-1] = bar
-            else:
-                candles.append(bar)
-        return candles
-
-    def status(self) -> dict:
-        now = now_ist()
-        zones = [z for lst in self.zone_cache.values() for z in lst]
-        return {
-            "angel": "Connected" if self.angel.connected else "Fallback",
-            "angel_error": self.angel.error,
-            "market": "LIVE" if market_open(now) else "CLOSED",
-            "last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--",
-            "source": self.source,
-            "zones_total": len(zones),
-            "demand": sum(1 for z in zones if z["side"] == "DEMAND"),
-            "supply": sum(1 for z in zones if z["side"] == "SUPPLY"),
-            "zones_updated": db.get_meta("zones_updated"),
-            "refreshing": self.refreshing,
-            "progress": f"{self.progress[0]}/{self.progress[1]}",
-            "ready": self.ready,
-            "server_time": now.strftime("%H:%M:%S"),
-        }
 
 
-engine = Engine()
+scanner_engine = ScannerEngine()
