@@ -1,139 +1,195 @@
-"""1-Day Demand & Supply zone detection (pure Price Action, ATR(14) only)."""
+from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-BASE_MAX_BODY = 0.50   # base: |close-open| <= 0.50 * range
-LEG_MIN_BODY = 0.70    # leg-out: |close-open| >= 0.70 * range
-LEG_ATR_MULT = 1.5     # leg-out range >= 1.5 * ATR(14)
-MAX_BASE = 3
-MAX_TOUCHES = 2        # 0 = Fresh, 1-2 = Tested, >2 hidden
 
-
-def atr14(df: pd.DataFrame) -> pd.Series:
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    return tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-
-
-def detect_zones(df: pd.DataFrame) -> list:
-    """df columns: date, open, high, low, close (ascending, completed candles only)."""
-    if df is None or len(df) < 30:
+def detect_zones_from_df(
+    df: pd.DataFrame,
+    timeframe: str = "1D",
+    max_zones_per_side: int = 2,
+    lookback_candles: int = 160,
+) -> List[Dict]:
+    """
+    Detects fresh Demand (RBR / DBR) and Supply (DBD / RBD) zones on any timeframe
+    (5m, 15m, 1H, 1D, 1W) using impulsive leg-out (>1.5x ATR) and freshness check.
+    """
+    if df is None or len(df) < 25:
         return []
-    df = df.reset_index(drop=True)
-    o = df["open"].to_numpy(dtype=float)
-    h = df["high"].to_numpy(dtype=float)
-    l = df["low"].to_numpy(dtype=float)
-    c = df["close"].to_numpy(dtype=float)
-    dates = df["date"].astype(str).to_numpy()
-    atr = atr14(df).to_numpy(dtype=float)
-    n = len(df)
 
-    rng = h - l
-    body = np.abs(c - o)
-    valid = rng > 0
-    is_base = valid & (body <= BASE_MAX_BODY * rng)
-    is_leg = valid & (body >= LEG_MIN_BODY * rng)
+    data = df.tail(lookback_candles).copy().reset_index(drop=True)
+    n = len(data)
 
-    zones = []
-    for i in range(1, n - 1):
-        li = i - 1  # leg-in candle: directional, non-base
-        if not is_base[i] or is_base[li] or not valid[li] or c[li] == o[li]:
+    high = data["high"].values
+    low = data["low"].values
+    open_p = data["open"].values
+    close_p = data["close"].values
+    vol = data["volume"].values if "volume" in data.columns else np.zeros(n)
+
+    prev_close = np.roll(close_p, 1)
+    prev_close[0] = close_p[0]
+    tr = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
+    atr = pd.Series(tr).rolling(14, min_periods=5).mean().bfill().values
+    avg_vol = pd.Series(vol).rolling(20, min_periods=5).mean().bfill().values
+
+    body = np.abs(close_p - open_p)
+    full_range = np.maximum(high - low, 1e-6)
+    body_ratio = body / full_range
+
+    demand_zones: List[Dict] = []
+    supply_zones: List[Dict] = []
+
+    # Scan backwards from recent completed candles
+    for i in range(n - 3, 2, -1):
+        curr_atr = max(atr[i], 1e-6)
+        # Base candle check: small body (< 55% of range)
+        if body_ratio[i] > 0.55:
             continue
-        legin_up = c[li] > o[li]
 
-        for nb in range(1, MAX_BASE + 1):
-            last = i + nb - 1
-            if last >= n - 1 or not is_base[last]:
-                break
-            j = last + 1
-            a = atr[last]
-            if np.isnan(a) or a <= 0:
+        # Leg-out candle (i+1) or 2-candle combined impulse
+        leg_move = close_p[i + 1] - open_p[i + 1]
+        leg_range = high[i + 1] - low[i + 1]
+        leg_vol_ratio = (vol[i + 1] / avg_vol[i + 1]) if avg_vol[i + 1] > 0 else 1.0
+
+        # Bullish Leg-Out -> DEMAND ZONE
+        if leg_move > 1.35 * curr_atr and close_p[i + 1] > high[i]:
+            z_low = float(min(low[i], low[i + 1]))
+            z_high = float(max(open_p[i], close_p[i]))
+            if z_high <= z_low:
+                z_high = float(high[i])
+
+            # Check freshness: future candles after i+1 must not break below z_low
+            future_lows = low[i + 2 :]
+            if len(future_lows) > 0 and np.min(future_lows) < z_low:
                 continue
 
-            leg_n = 0
-            if is_leg[j] and rng[j] >= LEG_ATR_MULT * a:
-                leg_n = 1
-            elif (
-                j + 1 < n
-                and is_leg[j]
-                and is_leg[j + 1]
-                and (c[j] > o[j]) == (c[j + 1] > o[j + 1])
-                and (max(h[j], h[j + 1]) - min(l[j], l[j + 1])) >= LEG_ATR_MULT * a
-            ):
-                leg_n = 2
-            if leg_n == 0:
+            ts_str = str(data["timestamp"].iloc[i])[:16]
+            strength = round(min(99.0, 55.0 + (leg_move / curr_atr) * 12.0 + min(leg_vol_ratio, 3.0) * 6.0), 1)
+            demand_zones.append(
+                {
+                    "timeframe": timeframe,
+                    "zone_type": "DEMAND",
+                    "zone_low": round(z_low, 2),
+                    "zone_high": round(z_high, 2),
+                    "origin_ts": ts_str,
+                    "strength": strength,
+                    "leg_vol_ratio": round(float(leg_vol_ratio), 2),
+                    "avg_vol": float(avg_vol[-1]) if avg_vol[-1] > 0 else 0.0,
+                }
+            )
+
+        # Bearish Leg-Out -> SUPPLY ZONE
+        elif (-leg_move) > 1.35 * curr_atr and close_p[i + 1] < low[i]:
+            z_high = float(max(high[i], high[i + 1]))
+            z_low = float(min(open_p[i], close_p[i]))
+            if z_low >= z_high:
+                z_low = float(low[i])
+
+            # Check freshness: future candles after i+1 must not break above z_high
+            future_highs = high[i + 2 :]
+            if len(future_highs) > 0 and np.max(future_highs) > z_high:
                 continue
 
-            end = j + leg_n - 1
-            up = c[j] > o[j]
-            b_hi = h[i : last + 1].max()
-            b_lo = l[i : last + 1].min()
-            if up and not c[end] > b_hi:
-                continue
-            if (not up) and not c[end] < b_lo:
-                continue
+            ts_str = str(data["timestamp"].iloc[i])[:16]
+            strength = round(min(99.0, 55.0 + ((-leg_move) / curr_atr) * 12.0 + min(leg_vol_ratio, 3.0) * 6.0), 1)
+            supply_zones.append(
+                {
+                    "timeframe": timeframe,
+                    "zone_type": "SUPPLY",
+                    "zone_low": round(z_low, 2),
+                    "zone_high": round(z_high, 2),
+                    "origin_ts": ts_str,
+                    "strength": strength,
+                    "leg_vol_ratio": round(float(leg_vol_ratio), 2),
+                    "avg_vol": float(avg_vol[-1]) if avg_vol[-1] > 0 else 0.0,
+                }
+            )
 
-            bodies_hi = np.maximum(o[i : last + 1], c[i : last + 1])
-            bodies_lo = np.minimum(o[i : last + 1], c[i : last + 1])
-            if up:
-                side = "DEMAND"
-                pattern = "RBR" if legin_up else "DBR"
-                proximal = float(bodies_hi.max())
-                distal = float(min(b_lo, l[li]))
-            else:
-                side = "SUPPLY"
-                pattern = "RBD" if legin_up else "DBD"
-                proximal = float(bodies_lo.min())
-                distal = float(max(b_hi, h[li]))
+        if len(demand_zones) >= max_zones_per_side and len(supply_zones) >= max_zones_per_side:
+            break
 
-            touches, dead = 0, False
-            for k in range(end + 1, n):
-                if side == "DEMAND":
-                    if c[k] < distal:
-                        dead = True
-                        break
-                    if l[k] <= proximal:
-                        touches += 1
-                else:
-                    if c[k] > distal:
-                        dead = True
-                        break
-                    if h[k] >= proximal:
-                        touches += 1
-            if not dead and touches <= MAX_TOUCHES:
-                zones.append(
-                    {
-                        "side": side,
-                        "pattern": pattern,
-                        "proximal": round(proximal, 2),
-                        "distal": round(distal, 2),
-                        "freshness": "Fresh" if touches == 0 else "Tested",
-                        "touches": int(touches),
-                        "formed": str(dates[j]),
-                    }
-                )
-            break  # one zone per base start
-    zones.sort(key=lambda z: z["formed"], reverse=True)
-    return zones
+    return demand_zones[:max_zones_per_side] + supply_zones[:max_zones_per_side]
 
 
-def is_hit(zone: dict, ltp: float, high: float, low: float) -> bool:
-    """Live trigger: LTP / today's low enters demand; LTP / today's high enters supply."""
-    p, d = zone["proximal"], zone["distal"]
-    if zone["side"] == "DEMAND":
-        return any(d <= x <= p for x in (ltp, low))
-    return any(p <= x <= d for x in (ltp, high))
+def evaluate_institutional_footprint(
+    ltp: float,
+    day_open: float,
+    day_high: float,
+    day_low: float,
+    day_volume: float,
+    avg_daily_vol: float,
+    tot_buy_qty: float,
+    tot_sell_qty: float,
+    zone_type: Optional[str] = None,
+) -> Dict:
+    """
+    Calculates real-time Institutional Buying / Selling score from:
+    1) Volume Spike vs 20-day average
+    2) Order-book Total Buy vs Total Sell Quantity imbalance
+    3) Intraday rejection wick / price action
+    """
+    vol_ratio = round(day_volume / avg_daily_vol, 2) if avg_daily_vol > 0 and day_volume > 0 else 1.0
+    buy_sell_ratio = round(tot_buy_qty / max(tot_sell_qty, 1.0), 2) if tot_buy_qty > 0 else 1.0
+    sell_buy_ratio = round(tot_sell_qty / max(tot_buy_qty, 1.0), 2) if tot_sell_qty > 0 else 1.0
 
+    candle_range = max(day_high - day_low, 1e-6)
+    lower_wick_pct = (min(ltp, day_open) - day_low) / candle_range if day_high > day_low else 0.0
+    upper_wick_pct = (day_high - max(ltp, day_open)) / candle_range if day_high > day_low else 0.0
 
-def in_zone(zone: dict, price) -> bool:
-    if price is None:
-        return False
-    p, d = zone["proximal"], zone["distal"]
-    return d <= price <= p if zone["side"] == "DEMAND" else p <= price <= d
+    inst_side = None
+    inst_score = 0
+    reasons: List[str] = []
+
+    # Check Institutional Buying
+    buy_points = 0
+    if vol_ratio >= 1.8:
+        buy_points += 40
+        reasons.append(f"Vol {vol_ratio}x")
+    elif vol_ratio >= 1.3:
+        buy_points += 20
+        reasons.append(f"Vol {vol_ratio}x")
+
+    if buy_sell_ratio >= 1.6:
+        buy_points += 35
+        reasons.append(f"Buyers {buy_sell_ratio}x")
+    elif buy_sell_ratio >= 1.25:
+        buy_points += 15
+
+    if lower_wick_pct >= 0.35 or (ltp > day_open and zone_type == "DEMAND"):
+        buy_points += 25
+        reasons.append("Zone Rejection")
+
+    # Check Institutional Selling
+    sell_points = 0
+    if vol_ratio >= 1.8:
+        sell_points += 40
+    elif vol_ratio >= 1.3:
+        sell_points += 20
+
+    if sell_buy_ratio >= 1.6:
+        sell_points += 35
+        reasons.append(f"Sellers {sell_buy_ratio}x")
+    elif sell_buy_ratio >= 1.25:
+        sell_points += 15
+
+    if upper_wick_pct >= 0.35 or (ltp < day_open and zone_type == "SUPPLY"):
+        sell_points += 25
+        reasons.append("Supply Rejection")
+
+    if zone_type == "DEMAND" or (zone_type is None and buy_points >= sell_points):
+        if buy_points >= 55:
+            inst_side = "INST_BUYING"
+            inst_score = min(99, buy_points)
+    if zone_type == "SUPPLY" or (zone_type is None and sell_points > buy_points):
+        if sell_points >= 55:
+            inst_side = "INST_SELLING"
+            inst_score = min(99, sell_points)
+
+    return {
+        "is_institutional": inst_side is not None,
+        "inst_side": inst_side,
+        "inst_score": inst_score,
+        "vol_ratio": vol_ratio,
+        "buy_sell_ratio": buy_sell_ratio,
+        "sell_buy_ratio": sell_buy_ratio,
+        "reasons": reasons[:3],
+    }
