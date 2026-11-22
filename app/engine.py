@@ -217,12 +217,8 @@ def get_state(self):
 with self._lock:
 return {"angel_connected": angel_client.connected, "angel_status": angel_client.status_msg, "market_open": self.is_market_open(), "last_scan": self.last_scan, "last_zone_update": self.last_update, "is_refreshing": self.is_refreshing, "refresh_progress": self.progress, "total_zones_1d": len(self.zones_1d), "demand_zones_1d": sum(1 for z in self.zones_1d if z["zone_type"] == "DEMAND"), "supply_zones_1d": sum(1 for z in self.zones_1d if z["zone_type"] == "SUPPLY"), "total_zones_mtf": len(self.zones_mtf), "touches": self.touches, "institutional": self.inst}
 scanner_engine = ScannerEngine()
-
 ---
-
 #### 3. `static/index.html` (Single Small Box)
-GitHub par **`static/index.html`** kholein -> Pencil (`✏️`) dabakar purana delete karein -> yeh paste karke **Commit changes** daba dein:
-
 ```html
 <!DOCTYPE html>
 <html lang="en">
