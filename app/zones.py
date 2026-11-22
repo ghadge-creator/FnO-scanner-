@@ -9,10 +9,6 @@ def detect_zones_from_df(
     max_zones_per_side: int = 2,
     lookback_candles: int = 160,
 ) -> List[Dict]:
-    """
-    Detects fresh Demand (RBR / DBR) and Supply (DBD / RBD) zones on any timeframe
-    (5m, 15m, 1H, 1D, 1W) using impulsive leg-out (>1.5x ATR) and freshness check.
-    """
     if df is None or len(df) < 25:
         return []
 
@@ -38,16 +34,12 @@ def detect_zones_from_df(
     demand_zones: List[Dict] = []
     supply_zones: List[Dict] = []
 
-    # Scan backwards from recent completed candles
     for i in range(n - 3, 2, -1):
         curr_atr = max(atr[i], 1e-6)
-        # Base candle check: small body (< 55% of range)
         if body_ratio[i] > 0.55:
             continue
 
-        # Leg-out candle (i+1) or 2-candle combined impulse
         leg_move = close_p[i + 1] - open_p[i + 1]
-        leg_range = high[i + 1] - low[i + 1]
         leg_vol_ratio = (vol[i + 1] / avg_vol[i + 1]) if avg_vol[i + 1] > 0 else 1.0
 
         # Bullish Leg-Out -> DEMAND ZONE
@@ -57,7 +49,6 @@ def detect_zones_from_df(
             if z_high <= z_low:
                 z_high = float(high[i])
 
-            # Check freshness: future candles after i+1 must not break below z_low
             future_lows = low[i + 2 :]
             if len(future_lows) > 0 and np.min(future_lows) < z_low:
                 continue
@@ -84,7 +75,6 @@ def detect_zones_from_df(
             if z_low >= z_high:
                 z_low = float(low[i])
 
-            # Check freshness: future candles after i+1 must not break above z_high
             future_highs = high[i + 2 :]
             if len(future_highs) > 0 and np.max(future_highs) > z_high:
                 continue
@@ -121,12 +111,6 @@ def evaluate_institutional_footprint(
     tot_sell_qty: float,
     zone_type: Optional[str] = None,
 ) -> Dict:
-    """
-    Calculates real-time Institutional Buying / Selling score from:
-    1) Volume Spike vs 20-day average
-    2) Order-book Total Buy vs Total Sell Quantity imbalance
-    3) Intraday rejection wick / price action
-    """
     vol_ratio = round(day_volume / avg_daily_vol, 2) if avg_daily_vol > 0 and day_volume > 0 else 1.0
     buy_sell_ratio = round(tot_buy_qty / max(tot_sell_qty, 1.0), 2) if tot_buy_qty > 0 else 1.0
     sell_buy_ratio = round(tot_sell_qty / max(tot_buy_qty, 1.0), 2) if tot_sell_qty > 0 else 1.0
@@ -139,7 +123,6 @@ def evaluate_institutional_footprint(
     inst_score = 0
     reasons: List[str] = []
 
-    # Check Institutional Buying
     buy_points = 0
     if vol_ratio >= 1.8:
         buy_points += 40
@@ -158,7 +141,6 @@ def evaluate_institutional_footprint(
         buy_points += 25
         reasons.append("Zone Rejection")
 
-    # Check Institutional Selling
     sell_points = 0
     if vol_ratio >= 1.8:
         sell_points += 40
@@ -192,4 +174,4 @@ def evaluate_institutional_footprint(
         "buy_sell_ratio": buy_sell_ratio,
         "sell_buy_ratio": sell_buy_ratio,
         "reasons": reasons[:3],
-    }
+                }
