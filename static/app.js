@@ -90,8 +90,8 @@ async function openChart(sym, tf, zType, zLow, zHigh, ltp, extraText) {
     }
 
     tvChartObj = LightweightCharts.createChart(chartEl, {
-      width: chartEl.clientWidth,
-      height: chartEl.clientHeight,
+      width: window.innerWidth,
+      height: window.innerHeight - 58,
       layout: { background: { color: "#0b0f17" }, textColor: "#d1d5db" },
       grid: { vertLines: { color: "#1f2937" }, horzLines: { color: "#1f2937" } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -169,7 +169,7 @@ function renderAll() {
           <span>LTP: <b>₹${t.ltp}</b></span>
           <span>Zone: <b>₹${t.zone_low} – ₹${t.zone_high}</b></span>
         </div>
-        <div class="meta-line" style="margin:0;">Origin: ${t.origin_ts} • Strength: ${t.strength}% • Tap for Chart</div>
+        <div class="meta-line" style="margin:0;">Origin: ${t.origin_ts} • Strength: ${t.strength}% • Tap anywhere for full chart</div>
       </div>`).join("");
 
   const listInst = document.getElementById("listInst");
@@ -189,7 +189,7 @@ function renderAll() {
           <span>LTP: <b>₹${item.ltp}</b></span>
           <span>Zone: <b>₹${item.zone_low} – ₹${item.zone_high}</b></span>
         </div>
-        <div class="meta-line" style="margin:0;">Vol: <b>${item.vol_ratio}x</b> • Order Book: <b>${isBuy ? item.buy_sell_ratio + "x Buy" : item.sell_buy_ratio + "x Sell"}</b> • Tap for Chart</div>
+        <div class="meta-line" style="margin:0;">Vol: <b>${item.vol_ratio}x</b> • Order Book: <b>${isBuy ? item.buy_sell_ratio + "x Buy" : item.sell_buy_ratio + "x Sell"}</b> • Tap for full chart</div>
         <div class="inst-badges">${reasonsHtml}</div>
       </div>`;
       }).join("");
