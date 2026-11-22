@@ -1,116 +1,135 @@
 <!DOCTYPE html>
-<html lang="en" class="bg-slate-950">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b1220" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="FnO Zones" />
-  <title>1D F&amp;O Demand &amp; Supply Scanner</title>
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="icon" href="/icon-192.png" type="image/png" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b0f17" />
+  <title>NSE F&O Zone & Institutional Scanner</title>
+  <link rel="manifest" href="/static/manifest.json" />
   <style>
-    html, body { background: #0b1220; overscroll-behavior-y: contain; -webkit-tap-highlight-color: transparent; }
-    .safe-top { padding-top: env(safe-area-inset-top, 0px); }
-    .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
-    .pulse-dot { animation: pulse 1.4s infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
-    .flash { animation: flash 1.6s ease-out 1; }
-    @keyframes flash { 0% { box-shadow: 0 0 0 2px #facc15; } 100% { box-shadow: 0 0 0 0 transparent; } }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #0b0f17; color: #e5e7eb; overflow-x: hidden; }
+
+    /* Top Status Header */
+    .topbar { background: #111827; padding: 12px 14px 8px; border-bottom: 1px solid #1f2937; position: sticky; top: 0; z-index: 20; }
+    .status-grid { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-bottom: 8px; }
+    .status-grid b.ok { color: #10b981; }
+    .status-grid b.warn { color: #f59e0b; }
+
+    /* WhatsApp-style 2-Page Tab Bar */
+    .page-tabs { display: flex; border-bottom: 1px solid #1f2937; background: #111827; }
+    .page-tab { flex: 1; text-align: center; padding: 10px 6px; font-size: 13px; font-weight: 700; color: #9ca3af; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; }
+    .page-tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
+    .page-tab .badge { background: #1f2937; color: #e5e7eb; padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
+    .page-tab.active .badge { background: #1d4ed8; color: #fff; }
+
+    /* Horizontal Swipe Wrapper */
+    .swipe-container { display: flex; width: 200vw; transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+    .page { width: 100vw; min-height: calc(100vh - 95px); padding: 12px 14px 40px; }
+
+    /* Controls & Filters */
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    button { border: none; border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-secondary { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
+    .btn-toggle { background: #1f2937; color: #f87171; border: 1px solid #374151; font-size: 12px; padding: 8px; }
+    .btn-toggle.on { color: #34d399; border-color: #059669; }
+
+    .meta-line { font-size: 11px; color: #9ca3af; margin-bottom: 10px; line-height: 1.4; }
+    .pill-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 2px; }
+    .pill { flex: 1; min-width: fit-content; text-align: center; padding: 8px 12px; border-radius: 10px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .pill.active { background: #f3f4f6; color: #111827; }
+    .tf-pill { padding: 6px 10px; border-radius: 8px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .tf-pill.active { background: #2563eb; color: #fff; }
+
+    /* Cards */
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+    .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .sym { font-size: 16px; font-weight: 800; color: #f9fafb; }
+    .tag-demand { background: rgba(16, 185, 129, 0.16); color: #34d399; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+    .tag-supply { background: rgba(239, 68, 68, 0.16); color: #f87171; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+    .tag-tf { background: #1e293b; color: #93c5fd; padding: 2px 6px; border-radius: 5px; font-size: 11px; font-weight: 700; margin-right: 5px; }
+    .card-mid { display: flex; justify-content: space-between; font-size: 13px; color: #d1d5db; margin-bottom: 6px; }
+    .inst-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .inst-chip { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+    .empty { text-align: center; color: #9ca3af; font-size: 13px; padding: 32px 16px; line-height: 1.5; }
   </style>
 </head>
-<body class="text-slate-100 min-h-screen font-sans antialiased">
+<body>
 
-  <!-- Status bar -->
-  <header class="sticky top-0 z-30 bg-slate-950/95 backdrop-blur border-b border-slate-800 safe-top">
-    <div class="px-3 py-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-      <div class="flex items-center gap-1.5">
-        <span class="text-slate-400">Angel One:</span>
-        <span id="st-angel" class="font-semibold text-amber-400">--</span>
-      </div>
-      <div class="flex items-center gap-1.5">
-        <span class="text-slate-400">Market:</span>
-        <span id="st-market" class="font-semibold text-slate-300">--</span>
-      </div>
-      <div class="flex items-center gap-1.5">
-        <span class="text-slate-400">Last Scan:</span>
-        <span id="st-scan" class="font-mono font-semibold text-slate-200">--:--:--</span>
-      </div>
-      <div class="flex items-center gap-1.5">
-        <span class="text-slate-400">Active Touches:</span>
-        <span id="st-active" class="font-semibold text-yellow-300">0</span>
-      </div>
+  <div class="topbar">
+    <div class="status-grid">
+      <div>Angel One: <b id="angelStatus" class="warn">Checking...</b></div>
+      <div>Market: <b id="marketStatus">--</b></div>
     </div>
-    <div id="refresh-bar" class="hidden px-3 pb-2 text-xs text-sky-300">
-      Refreshing 1D zones… <span id="refresh-progress" class="font-mono"></span>
+    <div class="status-grid" style="margin-bottom:4px;">
+      <div>Last Scan: <b id="lastScan">--:--:--</b></div>
+      <div>1D Touches: <b id="touchCount">0</b> | Inst: <b id="instCount">0</b></div>
     </div>
-  </header>
-
-  <main class="px-3 pt-3 pb-24 max-w-2xl mx-auto">
-
-    <!-- Actions -->
-    <div class="grid grid-cols-2 gap-2">
-      <button id="btn-test" class="rounded-xl bg-indigo-600 active:bg-indigo-700 py-3 text-sm font-semibold">
-        ▶ Test Live Scan Now
-      </button>
-      <button id="btn-refresh" class="rounded-xl bg-slate-800 active:bg-slate-700 py-3 text-sm font-semibold border border-slate-700">
-        ⟳ Refresh 1D Zones
-      </button>
-      <button id="btn-sound" class="rounded-xl bg-slate-900 active:bg-slate-800 py-2.5 text-xs font-medium border border-slate-800">
-        🔇 Sound: OFF
-      </button>
-      <button id="btn-notif" class="rounded-xl bg-slate-900 active:bg-slate-800 py-2.5 text-xs font-medium border border-slate-800">
-        🔕 Alerts: OFF
-      </button>
-    </div>
-    <button id="btn-install" class="hidden mt-2 w-full rounded-xl bg-emerald-700 py-2.5 text-sm font-semibold">
-      📲 Install App
-    </button>
-
-    <!-- Zone summary -->
-    <p id="zone-summary" class="mt-3 text-[11px] text-slate-500"></p>
-
-    <!-- Test banner -->
-    <div id="test-banner" class="hidden mt-3 rounded-xl border border-indigo-500/40 bg-indigo-950/50 p-3 text-xs text-indigo-200">
-      <div class="font-semibold">TEST MODE — latest closing data</div>
-      <div id="test-msg" class="mt-0.5 text-indigo-300/80"></div>
-      <button id="btn-exit-test" class="mt-2 rounded-lg bg-indigo-700 px-3 py-1.5 font-semibold">Back to Live</button>
-    </div>
-
-    <!-- Filter tabs -->
-    <div class="mt-3 flex gap-2 text-xs">
-      <button data-filter="ALL" class="tab flex-1 rounded-lg py-2 font-semibold">All</button>
-      <button data-filter="DEMAND" class="tab flex-1 rounded-lg py-2 font-semibold">1D Demand</button>
-      <button data-filter="SUPPLY" class="tab flex-1 rounded-lg py-2 font-semibold">1D Supply</button>
-    </div>
-
-    <!-- Cards -->
-    <section id="cards" class="mt-3 space-y-3"></section>
-    <p id="empty" class="hidden text-center text-sm text-slate-500 py-14 leading-relaxed"></p>
-  </main>
-
-  <!-- Chart modal -->
-  <div id="chart-modal" class="hidden fixed inset-0 z-50 bg-slate-950 flex flex-col">
-    <div class="safe-top bg-slate-950 border-b border-slate-800">
-      <div class="flex items-center justify-between px-3 py-2">
-        <div class="min-w-0">
-          <div id="chart-title" class="text-base font-bold truncate"></div>
-          <div id="chart-sub" class="text-[11px] text-slate-400 truncate"></div>
-        </div>
-        <button id="chart-close" class="ml-3 rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold">✕ Close</button>
-      </div>
-    </div>
-    <div id="chart" class="flex-1 min-h-0"></div>
-    <div id="chart-legend" class="safe-bottom px-3 py-2 text-xs border-t border-slate-800 bg-slate-950"></div>
+    <div id="refreshBanner" style="font-size:11px; color:#60a5fa; display:none; margin-bottom:4px;"></div>
   </div>
 
-  <div id="toast" class="hidden fixed left-1/2 -translate-x-1/2 bottom-6 z-[60] max-w-[90%] rounded-xl bg-slate-800 border border-slate-600 px-4 py-2 text-sm shadow-xl"></div>
+  <!-- WhatsApp Style 2-Screen Switcher -->
+  <div class="page-tabs">
+    <div class="page-tab active" id="tab0" onclick="goToPage(0)">
+      1D Demand & Supply <span class="badge" id="badge1d">0</span>
+    </div>
+    <div class="page-tab" id="tab1" onclick="goToPage(1)">
+      🔥 Inst. Orders (All TF) <span class="badge" id="badgeInst">0</span>
+    </div>
+  </div>
+
+  <div class="swipe-container" id="swipeContainer">
+
+    <!-- PAGE 1: ORIGINAL 1D DEMAND & SUPPLY SCANNER -->
+    <div class="page" id="page0">
+      <div class="btn-row">
+        <button class="btn-primary" onclick="triggerScan()">▶ Test Live Scan Now</button>
+        <button class="btn-secondary" onclick="triggerRefresh()">↻ Refresh Zones</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn-toggle" id="soundBtn" onclick="toggleSound()">🔇 Sound: OFF</button>
+        <button class="btn-toggle" id="alertBtn" onclick="toggleAlerts()">🔕 Alerts: OFF</button>
+      </div>
+      <div class="meta-line" id="metaInfo">Loading zones...</div>
+
+      <div class="pill-row">
+        <div class="pill active" onclick="setFilter1D('ALL', this)">All</div>
+        <div class="pill" onclick="setFilter1D('DEMAND', this)">1D Demand</div>
+        <div class="pill" onclick="setFilter1D('SUPPLY', this)">1D Supply</div>
+      </div>
+
+      <div id="list1D"></div>
+    </div>
+
+    <!-- PAGE 2: NEW ALL-TIMEFRAME INSTITUTIONAL BUYING & SELLING -->
+    <div class="page" id="page1">
+      <div class="meta-line" style="color:#93c5fd;">
+        Live Institutional Footprint: <b>Volume Spike + Order-Book Buy/Sell Imbalance + Zone Rejection</b> across 5m, 15m, 1H, 1D & 1W.
+      </div>
+
+      <!-- Timeframe Filter -->
+      <div class="pill-row">
+        <div class="tf-pill active" onclick="setTfFilter('ALL', this)">All TF</div>
+        <div class="tf-pill" onclick="setTfFilter('5m', this)">5m</div>
+        <div class="tf-pill" onclick="setTfFilter('15m', this)">15m</div>
+        <div class="tf-pill" onclick="setTfFilter('1H', this)">1H</div>
+        <div class="tf-pill" onclick="setTfFilter('1D', this)">1D</div>
+        <div class="tf-pill" onclick="setTfFilter('1W', this)">1W</div>
+      </div>
+
+      <!-- Buying / Selling Filter -->
+      <div class="pill-row">
+        <div class="pill active" onclick="setInstSideFilter('ALL', this)">All Orders</div>
+        <div class="pill" onclick="setInstSideFilter('INST_BUYING', this)">🟢 Inst. Buying</div>
+        <div class="pill" onclick="setInstSideFilter('INST_SELLING', this)">🔴 Inst. Selling</div>
+      </div>
+
+      <div id="listInst"></div>
+    </div>
+
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
-</html>
+  </html>
