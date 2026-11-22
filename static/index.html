@@ -33,10 +33,10 @@
     .pill.active { background: #f3f4f6; color: #111827; }
     .tf-pill { padding: 6px 10px; border-radius: 8px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 700; cursor: pointer; }
     .tf-pill.active { background: #2563eb; color: #fff; }
-    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 10px; cursor: pointer; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; margin-bottom: 10px; cursor: pointer; }
     .card:active { transform: scale(0.99); border-color: #3b82f6; }
     .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .sym { font-size: 16px; font-weight: 800; color: #f9fafb; }
+    .sym { font-size: 17px; font-weight: 800; color: #f9fafb; }
     .tag-demand { background: rgba(16, 185, 129, 0.16); color: #34d399; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
     .tag-supply { background: rgba(239, 68, 68, 0.16); color: #f87171; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
     .tag-tf { background: #1e293b; color: #93c5fd; padding: 2px 6px; border-radius: 5px; font-size: 11px; font-weight: 700; margin-right: 5px; }
@@ -44,10 +44,10 @@
     .inst-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
     .inst-chip { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; }
     .empty { text-align: center; color: #9ca3af; font-size: 13px; padding: 32px 16px; line-height: 1.5; }
-    .modal { display: none; position: fixed; inset: 0; background: #0b0f17; z-index: 60; flex-direction: column; }
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #0b0f17; z-index: 9999; flex-direction: column; }
     .modal.open { display: flex; }
-    .modal-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #111827; border-bottom: 1px solid #1f2937; }
-    #tvChart { flex: 1; width: 100%; touch-action: none; }
+    .modal-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #111827; border-bottom: 1px solid #1f2937; flex-shrink: 0; }
+    #tvChart { flex: 1; width: 100vw; height: calc(100vh - 58px); touch-action: none; }
   </style>
 </head>
 <body>
@@ -88,7 +88,7 @@
     </div>
 
     <div class="page" id="page1">
-      <div class="meta-line" style="color:#93c5fd;">Tap any stock card to open <b>Full-Screen Interactive Chart</b> (Drag & Pinch Zoom).</div>
+      <div class="meta-line" style="color:#93c5fd;">Tap anywhere on a card for <b>Full-Screen TradingView Chart</b> (Drag & Pinch Zoom).</div>
       <div class="pill-row">
         <div class="tf-pill active" onclick="setTfFilter('ALL', this)">All TF</div>
         <div class="tf-pill" onclick="setTfFilter('5m', this)">5m</div>
@@ -110,7 +110,7 @@
     <div class="modal-hdr">
       <div>
         <b id="mTitle" style="font-size:16px; color:#f9fafb;">--</b>
-        <div id="mSub" style="font-size:11px; color:#9ca3af;">Loading interactive chart...</div>
+        <div id="mSub" style="font-size:11px; color:#9ca3af;">Loading full-screen chart...</div>
       </div>
       <button class="btn-secondary" style="padding:8px 14px;" onclick="closeChart()">✕ Close</button>
     </div>
@@ -119,4 +119,4 @@
 
   <script src="/static/app.js"></script>
 </body>
-</html>
+    </html>
