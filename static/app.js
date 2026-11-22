@@ -1,307 +1,190 @@
-(() => {
-  'use strict';
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  const fmt = (n) => (n === null || n === undefined || isNaN(n)) ? '--' :
-    Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const store = {
-    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
-  };
+let currentPage = 0;
+let filter1D = "ALL";
+let filterTF = "ALL";
+let filterInstSide = "ALL";
+let soundOn = false;
+let alertsOn = false;
+let latestState = null;
 
-  let live = [], test = [], shown = [];
-  let mode = 'live', filter = 'ALL', status = {};
-  let soundOn = store.get('sound', false), notifOn = store.get('notif', false);
-  let seen = new Set(), firstLoad = true;
-  let audioCtx = null, chart = null, ro = null, deferredInstall = null, toastTimer = null;
+// WhatsApp-style Touch Swipe Navigation
+let touchStartX = 0;
+let touchStartY = 0;
+const container = document.getElementById("swipeContainer");
 
-  // ---------- helpers ----------
-  function toast(msg, ms = 2800) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.classList.remove('hidden');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
+document.addEventListener("touchstart", (e) => {
+  touchStartX = e.changedTouches[0].screenX;
+  touchStartY = e.changedTouches[0].screenY;
+}, { passive: true });
+
+document.addEventListener("touchend", (e) => {
+  const dx = e.changedTouches[0].screenX - touchStartX;
+  const dy = e.changedTouches[0].screenY - touchStartY;
+  if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+    if (dx < 0 && currentPage === 0) goToPage(1);
+    if (dx > 0 && currentPage === 1) goToPage(0);
+  }
+}, { passive: true });
+
+function goToPage(idx) {
+  currentPage = idx;
+  container.style.transform = `translateX(-${idx * 100}vw)`;
+  document.getElementById("tab0").classList.toggle("active", idx === 0);
+  document.getElementById("tab1").classList.toggle("active", idx === 1);
+}
+
+function setFilter1D(val, el) {
+  filter1D = val;
+  el.parentElement.querySelectorAll(".pill").forEach((p) => p.classList.remove("active"));
+  el.classList.add("active");
+  renderAll();
+}
+
+function setTfFilter(val, el) {
+  filterTF = val;
+  el.parentElement.querySelectorAll(".tf-pill").forEach((p) => p.classList.remove("active"));
+  el.classList.add("active");
+  renderAll();
+}
+
+function setInstSideFilter(val, el) {
+  filterInstSide = val;
+  el.parentElement.querySelectorAll(".pill").forEach((p) => p.classList.remove("active"));
+  el.classList.add("active");
+  renderAll();
+}
+
+function toggleSound() {
+  soundOn = !soundOn;
+  const btn = document.getElementById("soundBtn");
+  btn.textContent = soundOn ? "🔊 Sound: ON" : "🔇 Sound: OFF";
+  btn.classList.toggle("on", soundOn);
+}
+
+function toggleAlerts() {
+  alertsOn = !alertsOn;
+  if (alertsOn && "Notification" in window) {
+    Notification.requestPermission();
+  }
+  const btn = document.getElementById("alertBtn");
+  btn.textContent = alertsOn ? "🔔 Alerts: ON" : "🔕 Alerts: OFF";
+  btn.classList.toggle("on", alertsOn);
+}
+
+async function triggerScan() {
+  await fetch("/api/scan", { method: "POST" });
+  fetchState();
+}
+
+async function triggerRefresh() {
+  await fetch("/api/refresh", { method: "POST" });
+  fetchState();
+}
+
+function renderAll() {
+  if (!latestState) return;
+  const s = latestState;
+
+  const angelEl = document.getElementById("angelStatus");
+  angelEl.textContent = s.angel_connected ? "Connected" : "Fallback";
+  angelEl.className = s.angel_connected ? "ok" : "warn";
+
+  const mktEl = document.getElementById("marketStatus");
+  mktEl.textContent = s.market_open ? "OPEN" : "CLOSED";
+  mktEl.style.color = s.market_open ? "#10b981" : "#f87171";
+
+  document.getElementById("lastScan").textContent = s.last_scan || "--:--:--";
+  const touches = s.touches || [];
+  const instList = s.institutional || [];
+
+  document.getElementById("touchCount").textContent = touches.length;
+  document.getElementById("instCount").textContent = instList.length;
+  document.getElementById("badge1d").textContent = touches.length;
+  document.getElementById("badgeInst").textContent = instList.length;
+
+  const banner = document.getElementById("refreshBanner");
+  if (s.is_refreshing) {
+    banner.style.display = "block";
+    banner.textContent = `Refreshing Multi-TF Zones... ${s.refresh_progress}`;
+  } else {
+    banner.style.display = "none";
   }
 
-  function ensureAudio() {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-  }
+  document.getElementById("metaInfo").textContent =
+    `${s.total_zones_1d} 1D zones (${s.demand_zones_1d} demand / ${s.supply_zones_1d} supply) • ${s.total_zones_mtf || 0} All-TF zones • updated ${s.last_zone_update}`;
 
-  function chime() {
-    if (!soundOn) return;
-    try {
-      ensureAudio();
-      const t0 = audioCtx.currentTime;
-      [[880, 0], [1175, 0.18], [1568, 0.36]].forEach(([f, d]) => {
-        const o = audioCtx.createOscillator();
-        const g = audioCtx.createGain();
-        o.type = 'sine';
-        o.frequency.value = f;
-        g.gain.setValueAtTime(0.0001, t0 + d);
-        g.gain.exponentialRampToValueAtTime(0.35, t0 + d + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.32);
-        o.connect(g); g.connect(audioCtx.destination);
-        o.start(t0 + d); o.stop(t0 + d + 0.36);
-      });
-    } catch (e) { /* audio unavailable */ }
-  }
-
-  async function pushNotify(t) {
-    if (!notifOn || !('Notification' in window) || Notification.permission !== 'granted') return;
-    const title = `${t.side === 'DEMAND' ? '🟢' : '🔴'} ${t.symbol} touched 1D ${t.side}`;
-    const body = `LTP ${fmt(t.ltp)} • Zone ${fmt(t.proximal)} – ${fmt(t.distal)} • ${t.pattern} ${t.freshness}`;
-    try {
-      const reg = await navigator.serviceWorker.ready;
-      await reg.showNotification(title, { body, icon: '/icon-192.png', tag: t.id, vibrate: [200, 100, 200] });
-    } catch (e) {
-      try { new Notification(title, { body }); } catch (_) { /* ignore */ }
-    }
-  }
-
-  // ---------- rendering ----------
-  function renderStatus() {
-    const a = $('st-angel');
-    a.textContent = status.angel || '--';
-    a.className = 'font-semibold ' + (status.angel === 'Connected' ? 'text-emerald-400' : 'text-amber-400');
-    const m = $('st-market');
-    m.innerHTML = status.market === 'LIVE'
-      ? '<span class="pulse-dot inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1"></span>LIVE'
-      : 'CLOSED';
-    m.className = 'font-semibold ' + (status.market === 'LIVE' ? 'text-emerald-400' : 'text-slate-400');
-    $('st-scan').textContent = status.last_scan || '--:--:--';
-    $('st-active').textContent = String(live.length);
-
-    const rb = $('refresh-bar');
-    if (status.refreshing) { rb.classList.remove('hidden'); $('refresh-progress').textContent = status.progress || ''; }
-    else rb.classList.add('hidden');
-
-    const parts = [];
-    if (status.zones_total !== undefined)
-      parts.push(`${status.zones_total} zones (${status.demand} demand / ${status.supply} supply)`);
-    if (status.zones_updated) parts.push(`updated ${status.zones_updated}`);
-    if (status.source && status.source !== '-') parts.push(`feed: ${status.source}`);
-    if (!status.ready) parts.push('starting up…');
-    if (status.angel !== 'Connected' && status.angel_error) parts.push(status.angel_error);
-    $('zone-summary').textContent = parts.join(' • ');
-  }
-
-  function cardHtml(t, i) {
-    const dem = t.side === 'DEMAND';
-    const border = dem ? 'border-l-emerald-500' : 'border-l-rose-500';
-    const badge = dem ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                      : 'bg-rose-500/15 text-rose-300 border-rose-500/40';
-    const fresh = t.freshness === 'Fresh' ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-300';
-    const zoneState = mode === 'test' ? '' : (t.in_zone
-      ? '<span class="rounded-md bg-yellow-400/20 text-yellow-300 px-2 py-0.5 text-[10px] font-bold">IN ZONE NOW</span>'
-      : '<span class="rounded-md bg-slate-700/60 text-slate-300 px-2 py-0.5 text-[10px] font-semibold">TOUCHED</span>');
-    return `
-    <button data-i="${i}" class="card w-full text-left rounded-2xl bg-slate-900 border border-slate-800 border-l-4 ${border} p-3 active:bg-slate-800 ${t._new ? 'flash' : ''}">
-      <div class="flex items-start justify-between">
-        <div>
-          <div class="text-lg font-bold leading-tight">${esc(t.symbol)}</div>
-          <div class="mt-1 flex flex-wrap gap-1.5">
-            <span class="rounded-md border px-2 py-0.5 text-[10px] font-bold ${badge}">1D ${dem ? 'Demand' : 'Supply'}</span>
-            <span class="rounded-md bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-200">${esc(t.pattern)}</span>
-            <span class="rounded-md px-2 py-0.5 text-[10px] font-bold ${fresh}">${esc(t.freshness)}</span>
-            ${zoneState}
-          </div>
+  // Render Page 1 (1D Demand & Supply)
+  const list1D = document.getElementById("list1D");
+  const filtered1D = touches.filter((t) => filter1D === "ALL" || t.zone_type === filter1D);
+  if (!filtered1D.length) {
+    list1D.innerHTML = `<div class="empty">${
+      s.market_open
+        ? "Scanning live F&O prices... No 1D zone touch right now."
+        : 'Market is closed. Tap "Test Live Scan Now" to check latest closing data.'
+    }</div>`;
+  } else {
+    list1D.innerHTML = filtered1D
+      .map(
+        (t) => `
+      <div class="card">
+        <div class="card-top">
+          <span class="sym">${t.symbol}</span>
+          <span class="${t.zone_type === "DEMAND" ? "tag-demand" : "tag-supply"}">1D ${t.zone_type}</span>
         </div>
-        <div class="text-right">
-          <div class="text-[10px] text-slate-500">LTP</div>
-          <div class="text-lg font-bold font-mono">${fmt(t.ltp)}</div>
+        <div class="card-mid">
+          <span>LTP: <b>₹${t.ltp}</b></span>
+          <span>Zone: <b>₹${t.zone_low} – ₹${t.zone_high}</b></span>
         </div>
-      </div>
-      <div class="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-        <div><div class="text-slate-500">Day High</div><div class="font-mono text-slate-200">${fmt(t.high)}</div></div>
-        <div><div class="text-slate-500">Day Low</div><div class="font-mono text-slate-200">${fmt(t.low)}</div></div>
-        <div><div class="text-slate-500">${mode === 'test' ? 'Candle' : 'Trigger'}</div><div class="font-mono text-slate-200">${esc(t.time)}</div></div>
-      </div>
-      <div class="mt-2 rounded-lg bg-slate-950/70 px-2 py-1.5 text-[11px] flex justify-between">
-        <span class="text-slate-500">Zone (Proximal – Distal)</span>
-        <span class="font-mono font-semibold ${dem ? 'text-emerald-300' : 'text-rose-300'}">${fmt(t.proximal)} – ${fmt(t.distal)}</span>
-      </div>
-    </button>`;
+        <div class="meta-line" style="margin:0;">Origin: ${t.origin_ts} • Strength: ${t.strength}% • ${t.touched_at}</div>
+      </div>`
+      )
+      .join("");
   }
 
-  function render() {
-    const src = mode === 'test' ? test : live;
-    shown = src.filter((t) => filter === 'ALL' || t.side === filter);
-    $('cards').innerHTML = shown.map(cardHtml).join('');
-    const empty = $('empty');
-    if (shown.length === 0) {
-      empty.classList.remove('hidden');
-      if (mode === 'test') empty.textContent = 'No stock is touching a 1D zone on the latest closing data.';
-      else if (status.market === 'LIVE') empty.textContent = 'Scanning live… no stock has touched a 1-Day zone yet today.';
-      else empty.textContent = 'Market is closed. Tap “Test Live Scan Now” to run the scanner on the latest closing data.';
-    } else empty.classList.add('hidden');
-    document.querySelectorAll('.tab').forEach((b) => {
-      const on = b.dataset.filter === filter;
-      b.className = 'tab flex-1 rounded-lg py-2 font-semibold ' +
-        (on ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-slate-300 border border-slate-800');
-    });
-    $('btn-sound').textContent = soundOn ? '🔔 Sound: ON' : '🔇 Sound: OFF';
-    $('btn-notif').textContent = notifOn ? '🔔 Alerts: ON' : '🔕 Alerts: OFF';
-    $('test-banner').classList.toggle('hidden', mode !== 'test');
+  // Render Page 2 (All-Timeframe Institutional Orders)
+  const listInst = document.getElementById("listInst");
+  const filteredInst = instList.filter((item) => {
+    const tfOk = filterTF === "ALL" || item.timeframe === filterTF;
+    const sideOk = filterInstSide === "ALL" || item.inst_side === filterInstSide;
+    return tfOk && sideOk;
+  });
+
+  if (!filteredInst.length) {
+    listInst.innerHTML = `<div class="empty">No strong institutional buying/selling footprint detected for selected filter right now.<br><br>Swipe right ➔ to return to 1D Zones.</div>`;
+  } else {
+    listInst.innerHTML = filteredInst
+      .map((item) => {
+        const isBuy = item.inst_side === "INST_BUYING";
+        const reasonsHtml = (item.reasons || [])
+          .map((r) => `<span class="inst-chip">${r}</span>`)
+          .join("");
+        return `
+      <div class="card" style="border-left: 4px solid ${isBuy ? "#10b981" : "#ef4444"};">
+        <div class="card-top">
+          <div><span class="tag-tf">${item.timeframe}</span><span class="sym">${item.symbol}</span></div>
+          <span class="${isBuy ? "tag-demand" : "tag-supply"}">${isBuy ? "🔥 INST. BUYING" : "🔥 INST. SELLING"}</span>
+        </div>
+        <div class="card-mid">
+          <span>LTP: <b>₹${item.ltp}</b></span>
+          <span>Zone: <b>₹${item.zone_low} – ₹${item.zone_high}</b></span>
+        </div>
+        <div class="meta-line" style="margin:0;">
+          Vol Spike: <b>${item.vol_ratio}x</b> • Buyers/Sellers: <b>${isBuy ? item.buy_sell_ratio + "x Buy" : item.sell_buy_ratio + "x Sell"}</b> • Score: <b>${item.inst_score}%</b>
+        </div>
+        <div class="inst-badges">${reasonsHtml}</div>
+      </div>`;
+      })
+      .join("");
   }
+}
 
-  // ---------- polling ----------
-  async function poll() {
-    try {
-      const r = await fetch('/api/state', { cache: 'no-store' });
-      if (!r.ok) throw new Error('bad');
-      const d = await r.json();
-      status = d.status || {};
-      const fresh = [];
-      live = (d.touches || []).map((t) => {
-        if (!seen.has(t.id)) {
-          seen.add(t.id);
-          if (!firstLoad) { t._new = true; fresh.push(t); }
-        }
-        return t;
-      });
-      firstLoad = false;
-      if (fresh.length) {
-        chime();
-        fresh.forEach(pushNotify);
-        toast(`${fresh.length} new 1D zone touch${fresh.length > 1 ? 'es' : ''}: ${fresh.map((t) => t.symbol).slice(0, 3).join(', ')}`);
-        if (navigator.vibrate) navigator.vibrate([150, 80, 150]);
-      }
-      renderStatus();
-      if (mode === 'live') render();
-    } catch (e) {
-      $('st-angel').textContent = 'Offline';
-      $('st-angel').className = 'font-semibold text-rose-400';
-    }
-  }
+async function fetchState() {
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) return;
+    latestState = await res.json();
+    renderAll();
+  } catch (e) {}
+}
 
-  // ---------- chart ----------
-  async function openChart(t) {
-    const dem = t.side === 'DEMAND';
-    const color = dem ? '#22c55e' : '#ef4444';
-    $('chart-modal').classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
-    $('chart-title').textContent = `${t.symbol} • 1D`;
-    $('chart-sub').textContent = `${dem ? 'Demand' : 'Supply'} ${t.pattern} • ${t.freshness} • LTP ${fmt(t.ltp)}`;
-    $('chart-legend').innerHTML =
-      `<span style="color:${color}" class="font-semibold">━ Proximal ${fmt(t.proximal)}</span>` +
-      `<span class="mx-2 text-slate-600">|</span>` +
-      `<span style="color:${color}" class="font-semibold">┅ Distal ${fmt(t.distal)}</span>`;
-    const el = $('chart');
-    el.innerHTML = '';
-    try {
-      const r = await fetch(`/api/chart/${encodeURIComponent(t.symbol)}?live=${mode === 'live' ? 1 : 0}`, { cache: 'no-store' });
-      const d = await r.json();
-      const candles = d.candles || [];
-      if (!candles.length) { el.innerHTML = '<p class="p-6 text-center text-slate-500">No candle data yet.</p>'; return; }
-      chart = LightweightCharts.createChart(el, {
-        width: el.clientWidth, height: el.clientHeight,
-        layout: { background: { color: '#0b1220' }, textColor: '#cbd5e1' },
-        grid: { vertLines: { color: '#162033' }, horzLines: { color: '#162033' } },
-        rightPriceScale: { borderColor: '#334155' },
-        timeScale: { borderColor: '#334155', rightOffset: 4 },
-        crosshair: { mode: 0 },
-      });
-      const series = chart.addCandlestickSeries({
-        upColor: '#22c55e', downColor: '#ef4444',
-        borderUpColor: '#22c55e', borderDownColor: '#ef4444',
-        wickUpColor: '#22c55e', wickDownColor: '#ef4444',
-      });
-      series.setData(candles);
-      series.createPriceLine({ price: t.proximal, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'Proximal' });
-      series.createPriceLine({ price: t.distal, color, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'Distal' });
-      const n = candles.length;
-      if (n > 120) chart.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 3 });
-      else chart.timeScale().fitContent();
-      ro = new ResizeObserver(() => chart && chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }));
-      ro.observe(el);
-    } catch (e) {
-      el.innerHTML = '<p class="p-6 text-center text-rose-400">Could not load chart.</p>';
-    }
-  }
-
-  function closeChart() {
-    if (ro) { ro.disconnect(); ro = null; }
-    if (chart) { chart.remove(); chart = null; }
-    $('chart').innerHTML = '';
-    $('chart-modal').classList.add('hidden');
-    document.body.style.overflow = '';
-  }
-
-  // ---------- events ----------
-  $('cards').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-i]');
-    if (b) openChart(shown[Number(b.dataset.i)]);
-  });
-  $('chart-close').addEventListener('click', closeChart);
-  document.querySelectorAll('.tab').forEach((b) =>
-    b.addEventListener('click', () => { filter = b.dataset.filter; render(); }));
-
-  $('btn-test').addEventListener('click', async () => {
-    const btn = $('btn-test');
-    btn.disabled = true; btn.textContent = 'Scanning…';
-    try {
-      const r = await fetch('/api/test-scan', { method: 'POST' });
-      const d = await r.json();
-      if (!d.ok) { toast(d.message, 4000); }
-      else {
-        test = d.touches; mode = 'test';
-        $('test-msg').textContent = d.message;
-        render();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      }
-    } catch (e) { toast('Test scan failed. Check connection.'); }
-    btn.disabled = false; btn.textContent = '▶ Test Live Scan Now';
-  });
-
-  $('btn-exit-test').addEventListener('click', () => { mode = 'live'; render(); });
-
-  $('btn-refresh').addEventListener('click', async () => {
-    try {
-      const r = await fetch('/api/refresh-zones', { method: 'POST' });
-      const d = await r.json();
-      toast(d.started ? 'Refreshing 1D zones… this takes a few minutes.' : 'A refresh is already running.', 3500);
-      poll();
-    } catch (e) { toast('Could not start refresh.'); }
-  });
-
-  $('btn-sound').addEventListener('click', () => {
-    soundOn = !soundOn; store.set('sound', soundOn);
-    if (soundOn) { try { ensureAudio(); } catch (e) { /* ignore */ } chime(); }
-    render();
-  });
-
-  $('btn-notif').addEventListener('click', async () => {
-    if (notifOn) { notifOn = false; store.set('notif', false); render(); return; }
-    if (!('Notification' in window)) { toast('Notifications are not supported on this browser.'); return; }
-    const perm = await Notification.requestPermission();
-    notifOn = perm === 'granted';
-    store.set('notif', notifOn);
-    if (!notifOn) toast('Notification permission was not granted.');
-    render();
-  });
-
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredInstall = e;
-    $('btn-install').classList.remove('hidden');
-  });
-  $('btn-install').addEventListener('click', async () => {
-    if (!deferredInstall) return;
-    deferredInstall.prompt();
-    await deferredInstall.userChoice;
-    deferredInstall = null;
-    $('btn-install').classList.add('hidden');
-  });
-  window.addEventListener('appinstalled', () => $('btn-install').classList.add('hidden'));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
-
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
-  }
-
-  render();
-  poll();
-  setInterval(poll, 5000);
-})();
+fetchState();
+setInterval(fetchState, 8000);
