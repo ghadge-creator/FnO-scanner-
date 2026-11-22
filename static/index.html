@@ -9,41 +9,31 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: #0b0f17; color: #e5e7eb; overflow-x: hidden; }
-
-    /* Top Status Header */
     .topbar { background: #111827; padding: 12px 14px 8px; border-bottom: 1px solid #1f2937; position: sticky; top: 0; z-index: 20; }
-    .status-grid { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-bottom: 8px; }
+    .status-grid { display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
     .status-grid b.ok { color: #10b981; }
     .status-grid b.warn { color: #f59e0b; }
-
-    /* WhatsApp-style 2-Page Tab Bar */
     .page-tabs { display: flex; border-bottom: 1px solid #1f2937; background: #111827; }
-    .page-tab { flex: 1; text-align: center; padding: 10px 6px; font-size: 13px; font-weight: 700; color: #9ca3af; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; }
+    .page-tab { flex: 1; text-align: center; padding: 10px 6px; font-size: 13px; font-weight: 700; color: #9ca3af; cursor: pointer; border-bottom: 3px solid transparent; }
     .page-tab.active { color: #60a5fa; border-bottom-color: #3b82f6; }
     .page-tab .badge { background: #1f2937; color: #e5e7eb; padding: 1px 6px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
     .page-tab.active .badge { background: #1d4ed8; color: #fff; }
-
-    /* Horizontal Swipe Wrapper */
     .swipe-container { display: flex; width: 200vw; transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
     .page { width: 100vw; min-height: calc(100vh - 95px); padding: 12px 14px 40px; }
-
-    /* Controls & Filters */
     .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
     button { border: none; border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .btn-primary { background: #2563eb; color: #fff; }
     .btn-secondary { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
     .btn-toggle { background: #1f2937; color: #f87171; border: 1px solid #374151; font-size: 12px; padding: 8px; }
     .btn-toggle.on { color: #34d399; border-color: #059669; }
-
     .meta-line { font-size: 11px; color: #9ca3af; margin-bottom: 10px; line-height: 1.4; }
-    .pill-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 2px; }
+    .pill-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; }
     .pill { flex: 1; min-width: fit-content; text-align: center; padding: 8px 12px; border-radius: 10px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 600; cursor: pointer; }
     .pill.active { background: #f3f4f6; color: #111827; }
     .tf-pill { padding: 6px 10px; border-radius: 8px; background: #1f2937; color: #9ca3af; font-size: 12px; font-weight: 700; cursor: pointer; }
     .tf-pill.active { background: #2563eb; color: #fff; }
-
-    /* Cards */
-    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 10px; cursor: pointer; }
+    .card:active { transform: scale(0.99); border-color: #3b82f6; }
     .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     .sym { font-size: 16px; font-weight: 800; color: #f9fafb; }
     .tag-demand { background: rgba(16, 185, 129, 0.16); color: #34d399; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }
@@ -53,10 +43,14 @@
     .inst-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
     .inst-chip { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 600; }
     .empty { text-align: center; color: #9ca3af; font-size: 13px; padding: 32px 16px; line-height: 1.5; }
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.88); z-index: 50; padding: 14px; align-items: center; justify-content: center; }
+    .modal.open { display: flex; }
+    .modal-box { background: #111827; border: 1px solid #374151; border-radius: 14px; width: 100%; max-width: 480px; padding: 14px; }
+    .modal-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    canvas { width: 100%; height: 270px; background: #0b0f17; border-radius: 10px; display: block; }
   </style>
 </head>
 <body>
-
   <div class="topbar">
     <div class="status-grid">
       <div>Angel One: <b id="angelStatus" class="warn">Checking...</b></div>
@@ -69,19 +63,12 @@
     <div id="refreshBanner" style="font-size:11px; color:#60a5fa; display:none; margin-bottom:4px;"></div>
   </div>
 
-  <!-- WhatsApp Style 2-Screen Switcher -->
   <div class="page-tabs">
-    <div class="page-tab active" id="tab0" onclick="goToPage(0)">
-      1D Demand & Supply <span class="badge" id="badge1d">0</span>
-    </div>
-    <div class="page-tab" id="tab1" onclick="goToPage(1)">
-      🔥 Inst. Orders (All TF) <span class="badge" id="badgeInst">0</span>
-    </div>
+    <div class="page-tab active" id="tab0" onclick="goToPage(0)">1D Demand & Supply <span class="badge" id="badge1d">0</span></div>
+    <div class="page-tab" id="tab1" onclick="goToPage(1)">🔥 Inst. Orders (All TF) <span class="badge" id="badgeInst">0</span></div>
   </div>
 
   <div class="swipe-container" id="swipeContainer">
-
-    <!-- PAGE 1: ORIGINAL 1D DEMAND & SUPPLY SCANNER -->
     <div class="page" id="page0">
       <div class="btn-row">
         <button class="btn-primary" onclick="triggerScan()">▶ Test Live Scan Now</button>
@@ -92,23 +79,16 @@
         <button class="btn-toggle" id="alertBtn" onclick="toggleAlerts()">🔕 Alerts: OFF</button>
       </div>
       <div class="meta-line" id="metaInfo">Loading zones...</div>
-
       <div class="pill-row">
         <div class="pill active" onclick="setFilter1D('ALL', this)">All</div>
         <div class="pill" onclick="setFilter1D('DEMAND', this)">1D Demand</div>
         <div class="pill" onclick="setFilter1D('SUPPLY', this)">1D Supply</div>
       </div>
-
       <div id="list1D"></div>
     </div>
 
-    <!-- PAGE 2: NEW ALL-TIMEFRAME INSTITUTIONAL BUYING & SELLING -->
     <div class="page" id="page1">
-      <div class="meta-line" style="color:#93c5fd;">
-        Live Institutional Footprint: <b>Volume Spike + Order-Book Buy/Sell Imbalance + Zone Rejection</b> across 5m, 15m, 1H, 1D & 1W.
-      </div>
-
-      <!-- Timeframe Filter -->
+      <div class="meta-line" style="color:#93c5fd;">Tap any stock card to view its <b>Candlestick Chart + Institutional Zone</b>.</div>
       <div class="pill-row">
         <div class="tf-pill active" onclick="setTfFilter('ALL', this)">All TF</div>
         <div class="tf-pill" onclick="setTfFilter('5m', this)">5m</div>
@@ -117,19 +97,25 @@
         <div class="tf-pill" onclick="setTfFilter('1D', this)">1D</div>
         <div class="tf-pill" onclick="setTfFilter('1W', this)">1W</div>
       </div>
-
-      <!-- Buying / Selling Filter -->
       <div class="pill-row">
         <div class="pill active" onclick="setInstSideFilter('ALL', this)">All Orders</div>
         <div class="pill" onclick="setInstSideFilter('INST_BUYING', this)">🟢 Inst. Buying</div>
         <div class="pill" onclick="setInstSideFilter('INST_SELLING', this)">🔴 Inst. Selling</div>
       </div>
-
       <div id="listInst"></div>
     </div>
+  </div>
 
+  <div class="modal" id="chartModal" onclick="if(event.target===this) closeChart()">
+    <div class="modal-box">
+      <div class="modal-hdr">
+        <div><b id="mTitle" style="font-size:16px;">--</b><div id="mSub" style="font-size:11px;color:#9ca3af;">Loading chart...</div></div>
+        <button class="btn-secondary" style="padding:6px 12px;" onclick="closeChart()">✕ Close</button>
+      </div>
+      <canvas id="zoneCanvas" width="440" height="270"></canvas>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>
 </body>
-  </html>
+</html>
