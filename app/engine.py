@@ -45,32 +45,47 @@ class ScannerEngine:
         if self.is_refreshing: return
         self.is_refreshing = True
         tot = len(self.universe)
-        n1d, nmtf, nav = [], [], {}
-        tfs = [("ONE_DAY", "1D", 220)] + ([("ONE_WEEK", "1W", 450), ("ONE_HOUR", "1H", 45), ("FIFTEEN_MINUTE", "15m", 12), ("FIVE_MINUTE", "5m", 5)] if mtf else [])
+        n1d, nav = [], {}
         try:
             angel_client.login()
+            # Phase 1: Fast 1D Zones first (finishes in ~30 sec!)
             for i, u in enumerate(self.universe, 1):
-                self.progress = f"{i}/{tot}"
+                self.progress = f"1D: {i}/{tot}"
                 sym, tok = u["symbol"], str(u.get("token", ""))
                 if not tok: continue
-                for iv, tf, d in tfs:
-                    df = self._get_df(sym, tok, iv, tf, d)
-                    if df is None or df.empty: continue
-                    if tf == "1D" and len(df) >= 5: nav[sym] = float(df["volume"].tail(20).mean())
-                    for z in detect_zones_from_df(df, tf, 2, 180):
+                df = self._get_df(sym, tok, "ONE_DAY", "1D", 220)
+                if df is not None and not df.empty:
+                    if len(df) >= 5: nav[sym] = float(df["volume"].tail(20).mean())
+                    for z in detect_zones_from_df(df, "1D", 2, 180):
                         z.update({"symbol": sym, "token": tok})
-                        if tf == "1D": n1d.append(z)
-                        nmtf.append(z)
-                    time.sleep(0.04)
-                if i % 10 == 0:
+                        n1d.append(z)
+                if i % 15 == 0:
                     with self._lock:
-                        self.zones_1d, self.zones_mtf = list(n1d), list(nmtf)
+                        self.zones_1d = list(n1d)
                         self.avg_vol.update(nav)
             with self._lock:
                 if n1d: self.zones_1d = n1d
-                if nmtf: self.zones_mtf = nmtf
                 self.avg_vol.update(nav)
                 self.last_update = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+            self.run_live_scan(force=True)
+
+            # Phase 2: Multi-TF (1W, 1H, 15m, 5m) for Institutional Screen
+            if mtf:
+                nmtf = list(n1d)
+                tfs = [("ONE_WEEK", "1W", 450), ("ONE_HOUR", "1H", 45), ("FIFTEEN_MINUTE", "15m", 12), ("FIVE_MINUTE", "5m", 5)]
+                for i, u in enumerate(self.universe, 1):
+                    self.progress = f"All-TF: {i}/{tot}"
+                    sym, tok = u["symbol"], str(u.get("token", ""))
+                    for iv, tf, d in tfs:
+                        df = self._get_df(sym, tok, iv, tf, d)
+                        if df is not None and not df.empty:
+                            for z in detect_zones_from_df(df, tf, 1, 140):
+                                z.update({"symbol": sym, "token": tok})
+                                nmtf.append(z)
+                    if i % 15 == 0:
+                        with self._lock: self.zones_mtf = list(nmtf)
+                with self._lock:
+                    if nmtf: self.zones_mtf = nmtf
         finally:
             self.is_refreshing, self.progress = False, f"{tot}/{tot}"
             self.run_live_scan(force=True)
@@ -97,7 +112,9 @@ class ScannerEngine:
         qs = self._quotes()
         if not qs: return
         now_s, day_k = datetime.now(IST).strftime("%H:%M:%S"), datetime.now(IST).strftime("%Y-%m-%d")
-        t1d, ih = [], []
+        best_1d, best_inst = {}, {}
+
+        # Deduplicate: keep 1 best zone per stock so badge count == exact cards shown
         for z in self.zones_1d:
             q = qs.get(str(z["token"]))
             if not q or q["ltp"] <= 0: continue
@@ -105,11 +122,14 @@ class ScannerEngine:
             px = max((zh - zl) * 0.35, ltp * 0.015)
             if (zl - px) <= ltp <= (zh + px):
                 fp = evaluate_institutional_footprint(ltp, q["open"], q["high"], q["low"], q["volume"], self.avg_vol.get(z["symbol"], 0), q["tot_buy_qty"], q["tot_sell_qty"], z["zone_type"])
-                t1d.append({**z, "ltp": round(ltp, 2), "touched_at": now_s, "institutional": fp})
+                prev = best_1d.get(z["symbol"])
+                if not prev or z["strength"] > prev["strength"]:
+                    best_1d[z["symbol"]] = {**z, "ltp": round(ltp, 2), "touched_at": now_s, "institutional": fp}
                 aid = f"{day_k}:1D:{z['symbol']}:{z['zone_type']}:{zl}"
                 if aid not in self.alerted:
                     self.alerted.add(aid)
                     send_alert(f"1D {z['zone_type']}: {z['symbol']} @ {ltp}", f"Zone {zl} - {zh}")
+
         for z in (self.zones_mtf or self.zones_1d):
             q = qs.get(str(z["token"]))
             if not q or q["ltp"] <= 0: continue
@@ -118,8 +138,13 @@ class ScannerEngine:
             if (zl - px) <= ltp <= (zh + px):
                 fp = evaluate_institutional_footprint(ltp, q["open"], q["high"], q["low"], q["volume"], self.avg_vol.get(z["symbol"], 0), q["tot_buy_qty"], q["tot_sell_qty"], z["zone_type"])
                 if fp.get("is_institutional"):
-                    ih.append({**z, "ltp": round(ltp, 2), "touched_at": now_s, **fp})
-        ih.sort(key=lambda x: x.get("inst_score", 0), reverse=True)
+                    k = f"{z['symbol']}:{z['timeframe']}"
+                    prev = best_inst.get(k)
+                    if not prev or fp["inst_score"] > prev["inst_score"]:
+                        best_inst[k] = {**z, "ltp": round(ltp, 2), "touched_at": now_s, **fp}
+
+        t1d = sorted(best_1d.values(), key=lambda x: x.get("strength", 0), reverse=True)
+        ih = sorted(best_inst.values(), key=lambda x: x.get("inst_score", 0), reverse=True)
         with self._lock:
             self.touches, self.inst, self.last_scan = t1d, ih, now_s
 
