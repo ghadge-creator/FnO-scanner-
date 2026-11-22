@@ -1,30 +1,18 @@
-import threading
-
+import os
 import requests
-from logzero import logger
-
-from . import config
 
 
-def _send(text: str) -> None:
-    if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
+def send_alert(title: str, body: str) -> None:
+    """
+    Sends optional Telegram notification if TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID are set.
+    Browser push & sound alerts work automatically via /api/state polling.
+    """
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not bot_token or not chat_id:
         return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        )
-    except Exception as e:
-        logger.warning("Telegram send failed: %s", e)
-
-
-def alert_touch(hit: dict) -> None:
-    icon = "🟢" if hit["side"] == "DEMAND" else "🔴"
-    text = (
-        f"{icon} <b>{hit['symbol']}</b> touched 1D {hit['side']} zone\n"
-        f"LTP: {hit['ltp']:.2f}  |  Day H/L: {hit['high']:.2f} / {hit['low']:.2f}\n"
-        f"Zone: {hit['proximal']:.2f} – {hit['distal']:.2f}  ({hit['pattern']}, {hit['freshness']})\n"
-        f"Time: {hit['time']}"
-    )
-    threading.Thread(target=_send, args=(text,), daemon=True).start()
+        url = f"https://telegram.org{bot_token}/sendMessage"
+        requests.post(url, json={"chat_id": chat_id, "text": f"🚨 {title}\n{body}"}, timeout=5)
+    except Exception:
+        pass
