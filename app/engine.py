@@ -276,44 +276,36 @@ out.sort(key=lambda t: (t["side"], t["symbol"]))
 return out
 def chart_data(self, symbol: str, live: bool) -> list:
         with db.conn() as c:
-rows = c.execute(
-"SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)
-).fetchall()
-candles = [
-{"time": r["d"], "open": r["o"], "high": r["h"], "low": r["l"], "close": r["c"]}
-for r in rows
-]
-q = self.quotes.get(symbol)
-if live and q and market_open() and q.get("ltp"):
-today = now_ist().strftime("%Y-%m-%d")
-bar = {
-"time": today,
-"open": q.get("open") or q["ltp"],
-"high": q.get("high") or q["ltp"],
-"low": q.get("low") or q["ltp"],
-"close": q["ltp"],
-}
-if candles and candles[-1]["time"] == today:
-candles[-1] = bar
-else:
-candles.append(bar)
-return candles
-def status(self) -> dict:
-now = now_ist()
-zones = [z for lst in self.zone_cache.values() for z in lst]
-return {
-"angel": "Connected" if self.angel.connected else "Fallback",
-"angel_error": self.angel.error,
-"market": "LIVE" if market_open(now) else "CLOSED",
-"last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--",
-"source": self.source,
-"zones_total": len(zones),
-"demand": sum(1 for z in zones if z["side"] == "DEMAND"),
-"supply": sum(1 for z in zones if z["side"] == "SUPPLY"),
-"zones_updated": db.get_meta("zones_updated"),
-"refreshing": self.refreshing,
-"progress": f"{self.progress[0]}/{self.progress[1]}",
-"ready": self.ready,
-"server_time": now.strftime("%H:%M:%S"),
-}
+            rows = c.execute("SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)).fetchall()
+        candles = [{"time": r["d"], "open": r["o"], "high": r["h"], "low": r["l"], "close": r["c"]} for r in rows]
+        q = self.quotes.get(symbol)
+        if live and q and market_open() and q.get("ltp"):
+            today = now_ist().strftime("%Y-%m-%d")
+            bar = {"time": today, "open": q.get("open") or q["ltp"], "high": q.get("high") or q["ltp"], "low": q.get("low") or q["ltp"], "close": q["ltp"]}
+            if candles and candles[-1]["time"] == today:
+                candles[-1] = bar
+            else:
+                candles.append(bar)
+        return candles
+
+    def status(self) -> dict:
+        now = now_ist()
+        zones = [z for lst in self.zone_cache.values() for z in lst]
+        return {
+            "angel": "Connected" if self.angel.connected else "Fallback",
+            "angel_error": self.angel.error,
+            "market": "LIVE" if market_open(now) else "CLOSED",
+            "last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--",
+            "source": self.source,
+            "zones_total": len(zones),
+            "demand": sum(1 for z in zones if z["side"] == "DEMAND"),
+            "supply": sum(1 for z in zones if z["side"] == "SUPPLY"),
+            "zones_updated": db.get_meta("zones_updated"),
+            "refreshing": self.refreshing,
+            "progress": f"{self.progress[0]}/{self.progress[1]}",
+            "ready": self.ready,
+            "server_time": now.strftime("%H:%M:%S"),
+        }
+
+
 engine = Engine()
