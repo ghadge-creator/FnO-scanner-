@@ -275,7 +275,7 @@ class Engine:
 out.sort(key=lambda t: (t["side"], t["symbol"]))
 return out
 def chart_data(self, symbol: str, live: bool) -> list:
-with db.conn() as c:
+        with db.conn() as c:
 rows = c.execute(
 "SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)
 ).fetchall()
