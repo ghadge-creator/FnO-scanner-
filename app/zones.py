@@ -125,11 +125,11 @@ def detect_zones(df: pd.DataFrame) -> list:
 
 
 def is_hit(zone: dict, ltp: float, high: float, low: float) -> bool:
-    """Live trigger: LTP / today's low enters demand; LTP / today's high enters supply."""
+    """Trigger ONLY when live LTP touches inside the zone (no pre-touch buffer)."""
     p, d = zone["proximal"], zone["distal"]
     if zone["side"] == "DEMAND":
-        return any(d <= x <= p for x in (ltp, low))
-    return any(p <= x <= d for x in (ltp, high))
+        return d <= ltp <= p
+    return p <= ltp <= d
 
 
 def in_zone(zone: dict, price) -> bool:
