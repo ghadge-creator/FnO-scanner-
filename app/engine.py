@@ -19,14 +19,6 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-def trading_day(now: datetime = None) -> str:
-    """9:15 AM today to 9:14 AM tomorrow counts as the same trading session."""
-    now = now or now_ist()
-    if now.time() < dtime(9, 15):
-        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    return now.strftime("%Y-%m-%d")
-
-
 def market_open(now: datetime = None) -> bool:
     now = now or now_ist()
     if now.weekday() >= 5:
@@ -48,6 +40,7 @@ class Engine:
         self._flag = threading.Lock()
         self._last_login_try = 0.0
 
+    # ---------- lifecycle ----------
     def startup(self):
         try:
             self.reload_universe()
@@ -70,6 +63,7 @@ class Engine:
         self._last_login_try = time.time()
         return self.angel.login()
 
+    # ---------- stage 1: zone pre-calculation ----------
     def load_zone_cache(self):
         cache = {}
         with db.conn() as c:
@@ -126,8 +120,13 @@ class Engine:
                     zones = detect_zones(df)
                     c.execute("DELETE FROM zones WHERE symbol=?", (sym,))
                     c.executemany(
-                        "INSERT INTO zones(symbol,side,pattern,proximal,distal,freshness,touches,formed) VALUES (?,?,?,?,?,?,?,?)",
-                        [(sym, z["side"], z["pattern"], z["proximal"], z["distal"], z["freshness"], z["touches"], z["formed"]) for z in zones],
+                        "INSERT INTO zones(symbol,side,pattern,proximal,distal,freshness,touches,formed)"
+                        " VALUES (?,?,?,?,?,?,?,?)",
+                        [
+                            (sym, z["side"], z["pattern"], z["proximal"], z["distal"],
+                             z["freshness"], z["touches"], z["formed"])
+                            for z in zones
+                        ],
                     )
                     n_zones += len(zones)
             db.set_meta("zones_updated", now_ist().strftime("%Y-%m-%d %H:%M:%S"))
@@ -139,7 +138,8 @@ class Engine:
             return False
         finally:
             self.refreshing = False
-            def _fetch_quotes(self) -> dict:
+            # ---------- stage 2: live touch detection ----------
+    def _fetch_quotes(self) -> dict:
         stocks = self.universe
         if self.angel.connected:
             tok2sym = {s["token"]: s["symbol"] for s in stocks if s.get("token")}
@@ -157,7 +157,11 @@ class Engine:
             return
         if not self.universe or not self.zone_cache:
             return
-        if not self.angel.connected and config.angel_configured() and time.time() - self._last_login_try > 120:
+        if (
+            not self.angel.connected
+            and config.angel_configured()
+            and time.time() - self._last_login_try > 120
+        ):
             self.login()
         try:
             quotes = self._fetch_quotes()
@@ -172,7 +176,7 @@ class Engine:
 
     def _evaluate(self, quotes: dict):
         now = now_ist()
-        day = trading_day(now)
+        day = (now - timedelta(hours=9, minutes=15)).strftime("%Y-%m-%d")
         ts = now.strftime("%Y-%m-%d %H:%M:%S")
         new_hits = []
         with db.conn() as c:
@@ -187,33 +191,56 @@ class Engine:
                         continue
                     key = f"{z['side']}:{z['proximal']}:{z['distal']}"
                     cur = c.execute(
-                        "INSERT OR IGNORE INTO touches(day,symbol,zone_key,side,pattern,proximal,distal,freshness,first_ts) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (day, sym, key, z["side"], z["pattern"], z["proximal"], z["distal"], z["freshness"], ts),
+                        "INSERT OR IGNORE INTO touches(day,symbol,zone_key,side,pattern,proximal,"
+                        "distal,freshness,first_ts) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (day, sym, key, z["side"], z["pattern"], z["proximal"],
+                         z["distal"], z["freshness"], ts),
                     )
                     if cur.rowcount == 1:
                         new_hits.append(
-                            {"symbol": sym, "side": z["side"], "pattern": z["pattern"], "proximal": z["proximal"], "distal": z["distal"], "freshness": z["freshness"], "ltp": ltp, "high": high, "low": low, "time": now.strftime("%H:%M:%S")}
+                            {"symbol": sym, "side": z["side"], "pattern": z["pattern"],
+                             "proximal": z["proximal"], "distal": z["distal"],
+                             "freshness": z["freshness"], "ltp": ltp, "high": high,
+                             "low": low, "time": now.strftime("%H:%M:%S")}
                         )
         for hit in new_hits:
             logger.info("TOUCH %s %s %s", hit["symbol"], hit["side"], hit["pattern"])
             notifier.alert_touch(hit)
 
+    # ---------- views ----------
     def live_touches(self) -> list:
-        day = trading_day()
+        day = (now_ist() - timedelta(hours=9, minutes=15)).strftime("%Y-%m-%d")
         with db.conn() as c:
-            rows = c.execute("SELECT * FROM touches WHERE day=? ORDER BY first_ts DESC", (day,)).fetchall()
+            rows = c.execute(
+                "SELECT * FROM touches WHERE day=? ORDER BY first_ts DESC", (day,)
+            ).fetchall()
         out = []
         for r in rows:
             q = self.quotes.get(r["symbol"], {})
             z = {"side": r["side"], "proximal": r["proximal"], "distal": r["distal"]}
             out.append(
-                {"id": f"{r['day']}|{r['symbol']}|{r['zone_key']}", "symbol": r["symbol"], "side": r["side"], "pattern": r["pattern"], "proximal": r["proximal"], "distal": r["distal"], "freshness": r["freshness"], "ltp": q.get("ltp"), "high": q.get("high"), "low": q.get("low"), "time": r["first_ts"][11:19], "in_zone": in_zone(z, q.get("ltp"))}
+                {
+                    "id": f"{r['day']}|{r['symbol']}|{r['zone_key']}",
+                    "symbol": r["symbol"],
+                    "side": r["side"],
+                    "pattern": r["pattern"],
+                    "proximal": r["proximal"],
+                    "distal": r["distal"],
+                    "freshness": r["freshness"],
+                    "ltp": q.get("ltp"),
+                    "high": q.get("high"),
+                    "low": q.get("low"),
+                    "time": r["first_ts"][11:19],
+                    "in_zone": in_zone(z, q.get("ltp")),
+                }
             )
         return out
 
     def test_scan(self):
+        """After-market test: latest stored daily candle acts as 'today'."""
         with db.conn() as c:
-            rows = [tuple(r) for r in c.execute("SELECT symbol,d,o,h,l,c FROM candles ORDER BY symbol,d")]
+            rows = [tuple(r) for r in c.execute(
+                "SELECT symbol,d,o,h,l,c FROM candles ORDER BY symbol,d")]
         if not rows:
             return None
         df = pd.DataFrame(rows, columns=["symbol", "date", "open", "high", "low", "close"])
@@ -227,19 +254,37 @@ class Engine:
             for z in detect_zones(g.iloc[:-1]):
                 if is_hit(z, ltp, high, low):
                     out.append(
-                        {"id": f"test|{sym}|{z['side']}:{z['proximal']}:{z['distal']}", "symbol": sym, "side": z["side"], "pattern": z["pattern"], "proximal": z["proximal"], "distal": z["distal"], "freshness": z["freshness"], "ltp": ltp, "high": high, "low": low, "time": str(last["date"]), "in_zone": in_zone(z, ltp)}
+                        {
+                            "id": f"test|{sym}|{z['side']}:{z['proximal']}:{z['distal']}",
+                            "symbol": sym, "side": z["side"], "pattern": z["pattern"],
+                            "proximal": z["proximal"], "distal": z["distal"],
+                            "freshness": z["freshness"], "ltp": ltp, "high": high,
+                            "low": low, "time": str(last["date"]),
+                            "in_zone": in_zone(z, ltp),
+                        }
                     )
         out.sort(key=lambda t: (t["side"], t["symbol"]))
         return out
 
     def chart_data(self, symbol: str, live: bool) -> list:
         with db.conn() as c:
-            rows = c.execute("SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)).fetchall()
-        candles = [{"time": r["d"], "open": r["o"], "high": r["h"], "low": r["l"], "close": r["c"]} for r in rows]
+            rows = c.execute(
+                "SELECT d,o,h,l,c FROM candles WHERE symbol=? ORDER BY d", (symbol,)
+            ).fetchall()
+        candles = [
+            {"time": r["d"], "open": r["o"], "high": r["h"], "low": r["l"], "close": r["c"]}
+            for r in rows
+        ]
         q = self.quotes.get(symbol)
         if live and q and market_open() and q.get("ltp"):
             today = now_ist().strftime("%Y-%m-%d")
-            bar = {"time": today, "open": q.get("open") or q["ltp"], "high": q.get("high") or q["ltp"], "low": q.get("low") or q["ltp"], "close": q["ltp"]}
+            bar = {
+                "time": today,
+                "open": q.get("open") or q["ltp"],
+                "high": q.get("high") or q["ltp"],
+                "low": q.get("low") or q["ltp"],
+                "close": q["ltp"],
+            }
             if candles and candles[-1]["time"] == today:
                 candles[-1] = bar
             else:
@@ -249,7 +294,21 @@ class Engine:
     def status(self) -> dict:
         now = now_ist()
         zones = [z for lst in self.zone_cache.values() for z in lst]
-        return {"angel": "Connected" if self.angel.connected else "Fallback", "angel_error": self.angel.error, "market": "LIVE" if market_open(now) else "CLOSED", "last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--", "source": self.source, "zones_total": len(zones), "demand": sum(1 for z in zones if z["side"] == "DEMAND"), "supply": sum(1 for z in zones if z["side"] == "SUPPLY"), "zones_updated": db.get_meta("zones_updated"), "refreshing": self.refreshing, "progress": f"{self.progress}/{self.progress}", "ready": self.ready, "server_time": now.strftime("%H:%M:%S")}
+        return {
+            "angel": "Connected" if self.angel.connected else "Fallback",
+            "angel_error": self.angel.error,
+            "market": "LIVE" if market_open(now) else "CLOSED",
+            "last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--",
+            "source": self.source,
+            "zones_total": len(zones),
+            "demand": sum(1 for z in zones if z["side"] == "DEMAND"),
+            "supply": sum(1 for z in zones if z["side"] == "SUPPLY"),
+            "zones_updated": db.get_meta("zones_updated"),
+            "refreshing": self.refreshing,
+            "progress": f"{self.progress[0]}/{self.progress[1]}",
+            "ready": self.ready,
+            "server_time": now.strftime("%H:%M:%S"),
+        }
 
 
 engine = Engine()
