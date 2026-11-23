@@ -1,9 +1,11 @@
+import os
 import struct
 import threading
 import zlib
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -28,12 +30,17 @@ async def lifespan(app: FastAPI):
     # 08:50 IST: refresh instrument master / F&O universe
     scheduler.add_job(engine.reload_universe, CronTrigger(hour=8, minute=50, timezone=IST),
                       id="universe", misfire_grace_time=600)
-    # 09:00 IST Mon-Fri: recompute all 1-Day zones
+    # 09:00 IST Mon-Fri: recompute all 1-Day zones before 9:15 market open
     scheduler.add_job(engine.refresh_zones, CronTrigger(day_of_week="mon-fri", hour=9, minute=0,
                       timezone=IST), id="zones", misfire_grace_time=600)
     # Live scan (only works inside 09:15-15:30 IST Mon-Fri)
     scheduler.add_job(engine.scan_live, IntervalTrigger(seconds=config.SCAN_INTERVAL_SEC),
                       id="scan", max_instances=1, coalesce=True)
+    # Keep Render free server awake 24x7
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if url:
+        scheduler.add_job(lambda: requests.get(f"{url}/healthz", timeout=10),
+                          IntervalTrigger(minutes=10), id="keep_alive")
     scheduler.start()
     logger.info("Scheduler started")
     yield
@@ -107,10 +114,10 @@ def make_icon(size: int) -> bytes:
         for y in range(int(y0 * s), min(int(y1 * s), size)):
             rows[y][a * 3 : b * 3] = bytes(color) * (b - a)
 
-    rect(150, 190, 160, 440, green)   # green wick
-    rect(110, 260, 200, 400, green)   # green body
-    rect(352, 90, 362, 350, red)      # red wick
-    rect(312, 140, 402, 290, red)     # red body
+    rect(150, 190, 160, 440, green)
+    rect(110, 260, 200, 400, green)
+    rect(352, 90, 362, 350, red)
+    rect(312, 140, 402, 290, red)
     raw = b"".join(b"\x00" + bytes(r) for r in rows)
 
     def chunk(tag, data):
