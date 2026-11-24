@@ -2,11 +2,11 @@
 import numpy as np
 import pandas as pd
 
-BASE_MAX_BODY = 0.50   # base: |close-open| <= 0.50 * range
-LEG_MIN_BODY = 0.70    # leg-out: |close-open| >= 0.70 * range
-LEG_ATR_MULT = 1.5     # leg-out range >= 1.5 * ATR(14)
+BASE_MAX_BODY = 0.50
+LEG_MIN_BODY = 0.70
+LEG_ATR_MULT = 1.5
 MAX_BASE = 3
-MAX_TOUCHES = 2        # 0 = Fresh, 1-2 = Tested, >2 hidden
+MAX_TOUCHES = 2
 
 
 def atr14(df: pd.DataFrame) -> pd.Series:
@@ -23,7 +23,6 @@ def atr14(df: pd.DataFrame) -> pd.Series:
 
 
 def detect_zones(df: pd.DataFrame) -> list:
-    """df columns: date, open, high, low, close (ascending, completed candles only)."""
     if df is None or len(df) < 30:
         return []
     df = df.reset_index(drop=True)
@@ -43,7 +42,7 @@ def detect_zones(df: pd.DataFrame) -> list:
 
     zones = []
     for i in range(1, n - 1):
-        li = i - 1  # leg-in candle: directional, non-base
+        li = i - 1
         if not is_base[i] or is_base[li] or not valid[li] or c[li] == o[li]:
             continue
         legin_up = c[li] > o[li]
@@ -119,13 +118,12 @@ def detect_zones(df: pd.DataFrame) -> list:
                         "formed": str(dates[j]),
                     }
                 )
-            break  # one zone per base start
+            break
     zones.sort(key=lambda z: z["formed"], reverse=True)
     return zones
 
 
 def is_hit(zone: dict, ltp: float, high: float, low: float) -> bool:
-    """Trigger ONLY when live LTP touches inside the zone (no pre-touch buffer)."""
     p, d = zone["proximal"], zone["distal"]
     if zone["side"] == "DEMAND":
         return d <= ltp <= p
