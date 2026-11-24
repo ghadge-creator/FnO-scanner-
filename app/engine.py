@@ -32,6 +32,8 @@ class Engine:
         self.universe = []
         self.zone_cache = {}
         self.quotes = {}
+        self.last_candles = {}
+        self.is_holiday = False
         self.last_scan = None
         self.source = "-"
         self.ready = False
@@ -66,10 +68,14 @@ class Engine:
     # ---------- stage 1: zone pre-calculation ----------
     def load_zone_cache(self):
         cache = {}
+        last_c = {}
         with db.conn() as c:
             for r in c.execute("SELECT * FROM zones"):
                 cache.setdefault(r["symbol"], []).append(dict(r))
+            for r in c.execute("SELECT symbol,d,o,h,l,c FROM candles ORDER BY d"):
+                last_c[r["symbol"]] = dict(r)
         self.zone_cache = cache
+        self.last_candles = last_c
 
     def refresh_zones_async(self) -> bool:
         if self.refreshing:
@@ -138,7 +144,8 @@ class Engine:
             return False
         finally:
             self.refreshing = False
-            # ---------- stage 2: live touch detection ----------
+
+# ---------- stage 2: live touch detection ----------
     def _fetch_quotes(self) -> dict:
         stocks = self.universe
         if self.angel.connected:
@@ -152,8 +159,28 @@ class Engine:
         self.source = "yfinance"
         return feeds.yf_quotes(stocks)
 
+    def _check_holiday(self, quotes: dict) -> bool:
+        """Detect NSE market holiday when live quotes match previous close."""
+        if not self.last_candles or not quotes:
+            return False
+        today = now_ist().strftime("%Y-%m-%d")
+        checked, unchanged = 0, 0
+        for sym in ("RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN"):
+            q = quotes.get(sym)
+            lc = self.last_candles.get(sym)
+            if q and lc and lc["d"] < today and q.get("ltp"):
+                checked += 1
+                if (
+                    abs(q["ltp"] - lc["c"]) < 0.05
+                    and abs((q.get("open") or q["ltp"]) - lc["o"]) < 0.05
+                    and abs((q.get("high") or q["ltp"]) - lc["h"]) < 0.05
+                ):
+                    unchanged += 1
+        return checked >= 3 and unchanged == checked
+
     def scan_live(self):
         if not self.ready or not market_open():
+            self.is_holiday = False
             return
         if not self.universe or not self.zone_cache:
             return
@@ -170,6 +197,10 @@ class Engine:
             return
         if not quotes:
             return
+        if self._check_holiday(quotes):
+            self.is_holiday = True
+            return
+        self.is_holiday = False
         self.quotes = quotes
         self.last_scan = now_ist()
         self._evaluate(quotes)
@@ -276,7 +307,7 @@ class Engine:
             for r in rows
         ]
         q = self.quotes.get(symbol)
-        if live and q and market_open() and q.get("ltp"):
+        if live and q and market_open() and (not self.is_holiday) and q.get("ltp"):
             today = now_ist().strftime("%Y-%m-%d")
             bar = {
                 "time": today,
@@ -294,10 +325,11 @@ class Engine:
     def status(self) -> dict:
         now = now_ist()
         zones = [z for lst in self.zone_cache.values() for z in lst]
+        is_live = market_open(now) and (not self.is_holiday)
         return {
             "angel": "Connected" if self.angel.connected else "Fallback",
             "angel_error": self.angel.error,
-            "market": "LIVE" if market_open(now) else "CLOSED",
+            "market": "LIVE" if is_live else "CLOSED",
             "last_scan": self.last_scan.strftime("%H:%M:%S") if self.last_scan else "--:--:--",
             "source": self.source,
             "zones_total": len(zones),
@@ -312,3 +344,7 @@ class Engine:
 
 
 engine = Engine()
+            
+
+
+
